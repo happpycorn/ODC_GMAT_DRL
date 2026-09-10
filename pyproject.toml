@@ -4,4 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.10"
-dependencies = []
+dependencies = [
+    "numba>=0.67.0",
+    "optuna>=4.9.0",
+    "scipy>=1.15.3",
+    "stable-baselines3[extra]>=2.9.0",
+]
