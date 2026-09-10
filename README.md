@@ -23,16 +23,19 @@
 ```
 envs/            Gym 環境
   base_env.py      共用底座：初始化雙方軌道、施加脈衝、傳播、組觀測、燃料/違規/時間帳
-  preliminary_env.py  初賽語意（B 攔截被動 A）——當底座的煙霧測試場景
+  preliminary_env.py  初賽語意（B 攔截被動 A）——驗證物理與底座接得起來的場景
+  final_env.py     ★ 決賽核心：回合交替追逃、單 agent + 可插拔對手、勝負判定
+  baselines.py     解析/啟發式基準對手（coast / naive_pursuer / naive_evader）
 physics/         軌道物理引擎（vendored 自 ODC_GMAT_Planner，見 PROVENANCE.md）
   propagator.py    get_r0_v0（六根數→r,v）、propagate（DOP853）
   core_math.py     動力學、J2/J3/J4、VNB、撞地檢查（逐字複製）
   scorer.py        官方計分公式（逐字複製）
-train.py         SAC + Optuna 超參搜尋（骨架）
+tests/           煙霧測試（uv run python tests/test_final_env.py）
+train.py         SAC + Optuna 超參搜尋（骨架，目前針對 preliminary_env）
 METHODOLOGY.md   理論與訓練方法論
 ```
 
-> 決賽的核心環境 `final_env.py`（回合交替追逃）尚未建（Linear HAP-53）。目前 `preliminary_env` 是用來驗證物理與底座接得起來的場景。
+> `final_env.py` 用**佔位參數**搭好了「結構對」的骨架（回合交替、雙方觀測、勝負判定都可跑、check_env 通過）。規則數字（窗口長度、Δv/燃料上限、捕獲半徑、初始軌道、計分）待官方公告（HAP-50）後填入；self-play 訓練管線是 HAP-54。
 
 ---
 
@@ -58,7 +61,8 @@ uv run train.py
 ## 現況（2026-09）
 
 - ✅ 物理引擎接好（`physics/`），env 用真實軌道傳播、`check_env` 通過、SAC 端到端可訓練（HAP-51 / HAP-52）。
-- ⏳ 決賽環境 `final_env.py`（回合交替追逃 + self-play）建置中（HAP-53 / HAP-54）。
+- ✅ 決賽環境 `final_env.py`（回合交替追逃、單 agent + 可插拔對手、勝負判定）骨架完成、測試通過（HAP-53）。
+- ⏳ self-play 訓練管線（curriculum + 凍結自我對打）建置中（HAP-54）。
 - ⏳ 決賽計分/規則細節待官方公告（HAP-50）。
 
 進度與待辦以 Linear 專案 `ODC_GMAT_DRL`（team Happpycorn / HAP）為準。
