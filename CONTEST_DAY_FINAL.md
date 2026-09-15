@@ -65,6 +65,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
    - `追者攔截所需 Δv（短程）` vs `追者剩餘燃料/單發上限`：need < 單發上限 → 追者這回合可能直接收掉。
    - `近地點高度` / `不推也安全`：任何一方 False → 那方不處理就會再入。
 4. **選建議**：copilot 最後會印「推演表排序」，**★ 推薦** 那個就是「對所有對手模型最壞結果最好」的大腦（drill 模式也預設採用它）。原則：採用推演結果「對最強對手模型（追者看 `dv_evader`/`escape_evader`、躲者看 `rollout_pursuer`）仍 WIN」的那個大腦；都 LOSE 就選最近距離最小（追者）/最大（躲者）的。
+   彩排實證（docs/EXPERIMENTS.md E13）：躲者場 ★ 推薦開局兩回合自己選了「推滿逃逸」（escape_evader、RL 躲者），燃料用完才換 rollout，整場撐到時限獲勝——**信推演表排序，不要硬套單一大腦**。
    ⚠️ 預設大腦（rollout）自己內部用的對手模型較弱，**它的第一建議不一定是推演表上最好的**——實測預設幾何下 rollout 躲者建議不動、推演對 rollout 追者 LOSE，而 `escape_evader` 推演 WIN。以推演表為準，不要只看第一個大腦。
 5. **先驗證再下**（時間允許）：
    ```bash
@@ -131,6 +132,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 ## 八、前一晚準備
 
 - [ ] 兩台筆電 `git pull && uv sync && uv run pytest`（全綠，含 GMAT 重播測試）
+- [ ] 各跑一場彩排：`uv run python tools/dress_rehearsal.py --role pursuer` 與 `--role evader`（GMAT 當真實世界，確認整條流程與每回合耗時；參考值：決策平均 1.5–3.9 s、最長 ~14 s）
 - [ ] `uv run python copilot.py drill --role pursuer` 與 `--role evader` 各跑一場（預熱 numba 快取）
 - [ ] `models/` 放最新的 pursuer / evader 模型（`evaluate.py` 確認過）
 - [ ] 印出本手冊第二、四節

@@ -203,6 +203,19 @@
 - 逐局比對隨機規則：雙條件在 6 局觸發逃逸，**rollout 躲者在這 6 局全部存活**，逃逸對 Lambert 追者輸 3 局、對 rollout 追者輸 5 局。差別在**絕對推力**：對稱規則集雙方單發 1500 m/s，隨機規則的單發上限可低到 50 m/s，比例對稱也逃不掉。
 - **最終決定**：不採用 AdaptiveEvader 當預設（再加第三個條件就是在 6 局上過擬合）。copilot 預設躲者維持 rollout；`escape_evader` 列為參考大腦，並把 rollout 追者加進躲者推演的對手模型，避免推演過度樂觀。當天手冊只保留一條窄結論：**正式規則若雙方單發上限都大（≥ ~1000 m/s）且燃料對稱，逃逸值得優先考慮**。
 
+## E13 當天流程彩排（GMAT 當真實世界，HAP-55）
+- **方法**：`tools/dress_rehearsal.py`。每回合 GMAT 重播全部歷程 → 帶表頭報表 → `copilot import` → 我方 `copilot advise`（推演全開，採用推演表 ★ 推薦）/ 對手 agent，兩邊都只看 GMAT 匯入的狀態。預設規則（對稱 1500/3000）、near_coplanar、seed 0。
+- **產物**：`reports/rehearsal_pursuer_vs_dv_evader.md`、`reports/rehearsal_evader_vs_rollout.md`
+
+| 場次 | 結局 | 回合 | 我方決策 平均 / 最長 | GMAT 每回合 | 匯入差最大 | 整場 |
+|---|---|---|---|---|---|---|
+| 我方追者 vs DvEvader | **捕獲（勝）** t=18,551 s | 62 | 1.5 s / 11.6 s | 0.5 s | 47 m | 79 s |
+| 我方躲者 vs rollout 追者 | **撐到時限（勝）**，最近 26.6 km | 78 | 3.9 s / 14.0 s | 0.6 s | 84 m | 208 s |
+
+- **亮點**：躲者那場的 ★ 推薦**自己選出了逃逸打法**——第 1 回合選 `escape_evader`（1500 m/s）、第 3 回合選 RL 躲者（又一發 1500 m/s，等於第二發逃逸），燃料用完後才交給 rollout 躲者。這正是 E12 發現「燃料與推力都對稱時開局逃逸最強」的打法，而 copilot 的推演排序（對 rollout 追者做推演）不需要任何手寫切換條件就找到了。
+- **邊界細節**：追者那場引擎在距離 5.0000 km 判定捕獲，同時刻 GMAT 為 5.0057 km（差 5.7 m）；該次交會最近到 30 m，GMAT 下同樣會捕獲。捕獲發生在邊界上時，要以官方 GMAT 判定為準。
+- **結論**：當天工具鏈（GMAT 報表 → 匯入 → 推演排序 → 脈衝 → GMAT）完整可用；決策最長 ~14 s，只要官方回合時限 ≥ 30 s 就能每回合跑完整推演。
+
 ## E10 用 rollout 大腦確認平衡結論
 - **產物**：`reports/rollout_rules_{symmetric,pursuer_fuel_2x,evader_small_burn_big_fuel}.md`（24 局，mixed 幾何）
 
