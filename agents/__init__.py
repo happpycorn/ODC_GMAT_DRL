@@ -4,15 +4,20 @@
     make_agent({"name": "lambert_pursuer", "time_weight_mps": 30})
     make_agent("sb3:runs/xxx/pursuer_final.zip")      # 訓練好的 RL 策略（見 agents/rl.py）
 """
-from agents.base import Agent, CallableAgent, CoastAgent, RandomAgent
+from agents.base import Agent, CallableAgent, CoastAgent, PoolAgent, RandomAgent
 from agents.analytic import DvEvader, LambertPursuer
+from agents.search import MinimaxEvader, MinimaxPursuer
 
 REGISTRY = {
     "coast": CoastAgent,
     "random": RandomAgent,
+    "pool": PoolAgent,
     "lambert_pursuer": LambertPursuer,
     "dv_evader": DvEvader,
     "dv_evader_fast": lambda **kw: DvEvader(directions="axes", mags=(1.0,), **kw),
+    "minimax_pursuer": MinimaxPursuer,
+    "minimax_evader": MinimaxEvader,
+    "minimax_evader_fast": lambda **kw: MinimaxEvader(directions="axes", mags=(1.0,), reply_weights=(0.0,), **kw),
 }
 
 

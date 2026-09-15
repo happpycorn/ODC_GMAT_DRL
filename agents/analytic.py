@@ -18,18 +18,41 @@ from physics.intercept import _refine_tof, intercept_scan, min_intercept, shoot_
 from physics.propagator import propagate
 
 
-def orbit_survives(game, side, dv_eci_mps, horizon=None):
-    """施加 dv 之後純滑行 horizon 秒（預設到 T_max）會不會掉到撞地高度以下。
+SAFETY_MARGIN_KM = 50.0
 
-    密切軌道近地點在撞地半徑之上 → 安全；否則看剩餘時間內會不會真的飛過近地點
-    （同 Planner 的 reaches_perigee 分拆法，二體近似，J2 在這個判斷上的影響可忽略）。
+
+def safe_radius(game, margin_km=SAFETY_MARGIN_KM):
+    return game.crash_radius + margin_km
+
+
+def orbit_survives(game, side, dv_eci_mps, horizon=None, margin_km=SAFETY_MARGIN_KM):
+    """施加 dv 之後純滑行 horizon 秒（預設到 T_max）會不會掉到「撞地高度 + 安全裕度」以下。
+
+    密切軌道近地點在門檻之上 → 安全；否則看剩餘時間內會不會真的飛過近地點
+    （同 Planner 的 reaches_perigee 分拆法，二體近似）。
+
+    ⚠️ 安全裕度是 2026-09-15 對打評測抓到的：零裕度時追者把近地點壓在 101–110 km 高度
+    （撞地線 100 km），二體判斷說安全，但 J2 讓近地點在幾圈內緩慢下沉，最後真的再入。
     """
     r = game.r(side)
     v = game.v(side) + np.asarray(dv_eci_mps, dtype=np.float64) / 1000.0
     h = game.time_left if horizon is None else horizon
-    if check_constraints(r, v, game.mu, game.crash_radius):
+    if check_constraints(r, v, game.mu, game.crash_radius + margin_km):
         return True
     return not reaches_perigee(r, v, game.mu, h)
+
+
+def rescue_burn(game, side):
+    """目前軌道撐不到比賽結束時，找最小的一發讓它恢復安全（沒有就回傳 None）。"""
+    cap = game.burn_cap(side)
+    if cap <= 0.0:
+        return None
+    for frac in (0.02, 0.05, 0.1, 0.2, 0.35, 0.5, 0.75, 1.0):
+        for d in _direction_set("full"):
+            dv = rsw_to_eci_dv(game, side, d * frac * cap)
+            if orbit_survives(game, side, dv):
+                return dv
+    return None
 
 
 def pursuer_need(game, horizon=None, max_revs=2, pts_per_period=24, n_refine=2, refine_iters=10,
@@ -61,9 +84,11 @@ def need_horizon(game, windows=4.0):
 class LambertPursuer(Agent):
     name = "lambert_pursuer"
 
-    def __init__(self, time_weight_mps=10.0, n_tof=40, max_revs=2, j2_shoot=True, coast_if_captures=True):
+    def __init__(self, time_weight_mps=10.0, pts_per_period=24, max_revs=2, j2_shoot=True,
+                 coast_if_captures=True, max_pts=240):
         self.time_weight_mps = time_weight_mps   # 每晚一個窗口抓到，願意多付多少 m/s
-        self.n_tof = n_tof
+        self.pts_per_period = pts_per_period     # TOF 網格密度跟軌道週期走（固定點數會漏極小值）
+        self.max_pts = max_pts
         self.max_revs = max_revs
         self.j2_shoot = j2_shoot
         self.coast_if_captures = coast_if_captures
@@ -88,8 +113,9 @@ class LambertPursuer(Agent):
         horizon = game.time_left
         if horizon <= 60.0:
             return np.zeros(3)
-        tofs, dvs, v1s, re_at, ve_at = intercept_scan(mu, gd, rp, vp, re, ve, 60.0, horizon, self.n_tof,
-                                                      self.max_revs, game.crash_radius)
+        n_tof = int(np.clip(math.ceil(horizon / game.period("pursuer") * self.pts_per_period), 8, self.max_pts))
+        tofs, dvs, v1s, re_at, ve_at = intercept_scan(mu, gd, rp, vp, re, ve, 60.0, horizon, n_tof,
+                                                      self.max_revs, safe_radius(game))
         dvs_mps = dvs * 1000.0
         if not np.any(np.isfinite(dvs_mps)):
             return np.zeros(3)
@@ -113,7 +139,7 @@ class LambertPursuer(Agent):
         # 在選中的 TOF 鄰域精修最小 Δv
         lo, hi = max(i - 1, 0), min(i + 1, len(tofs) - 1)
         d, tof, v1 = _refine_tof(mu, gd, rp, vp, re_at[lo], ve_at[lo], tofs[lo], tofs[hi],
-                                 self.max_revs, game.crash_radius, 12)
+                                 self.max_revs, safe_radius(game), 12)
         if not math.isfinite(d) or d * 1000.0 > dvs_mps[i]:
             tof, v1 = tofs[i], v1s[i]
         if self.j2_shoot and gd > 0:
@@ -126,16 +152,19 @@ class LambertPursuer(Agent):
         full = mag <= cap
         if not full:
             dv *= cap / mag
-        # 完整攔截解的弧已在掃描時檢查過（捕獲就結束比賽）；部分推力沒有這個保證，
-        # 要確認推完之後的軌道撐得到比賽結束，不行就減半重試
-        if not full:
-            for _ in range(8):
-                if orbit_survives(game, side, dv):
-                    break
-                dv *= 0.5
-            else:
-                return np.zeros(3)
-        return dv
+        # 完整解且在這個窗口內抓到 → 躲者來不及反應，弧已檢查過安全，直接推。
+        # 其他情況（部分推力、或躲者還有機會閃開）推完的軌道必須撐到比賽結束：
+        # 不行就減半重試；連不推都會再入的話改做救命推力。
+        if full and tof <= game.next_window():
+            return dv
+        if orbit_survives(game, side, dv):
+            return dv
+        for _ in range(8):
+            dv *= 0.5
+            if orbit_survives(game, side, dv):
+                return dv
+        rb = rescue_burn(game, side)
+        return rb if rb is not None else np.zeros(3)
 
 
 def _direction_set(kind):
@@ -177,13 +206,17 @@ class DvEvader(Agent):
         cands = [np.zeros(3)]
         if cap > 0.0:
             cands += [d * m * cap for d in self.dirs for m in self.mags]
+        doomed = not orbit_survives(game, side, np.zeros(3))
         for k, dv_rsw in enumerate(cands):
             dv = rsw_to_eci_dv(game, side, dv_rsw)
-            if k > 0 and not orbit_survives(game, side, dv):
+            if (k > 0 or doomed) and not orbit_survives(game, side, dv):
                 continue                      # 推完會在比賽結束前再入：直接淘汰
             g = game.clone()
             g.play_turn(dv)
             s = self._score(g, float(np.linalg.norm(dv_rsw)))
             if s > best[0]:
                 best = (s, dv)
+        if best[0] == -math.inf and doomed:
+            rb = rescue_burn(game, side)
+            return rb if rb is not None else np.zeros(3)
         return best[1]

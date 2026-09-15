@@ -26,11 +26,11 @@ from gymnasium import spaces
 
 from agents import make_agent
 from agents.analytic import need_horizon, pursuer_need
+from game.actions import action_to_dv
 from game.core import Game
 from game.obs import OBS_DIM, build_obs
 from game.rules import SIDES, RuleRanges, Rules, other
 from game.scenarios import sample_scenario
-from physics.frames import rsw_basis
 
 
 class GmatFinalEnv(gym.Env):
@@ -131,14 +131,7 @@ class GmatFinalEnv(gym.Env):
             g.play_turn(opp.act(g, g.mover))
 
     def _action_to_dv(self, action):
-        a = np.asarray(action, dtype=np.float64).reshape(3)
-        a = np.nan_to_num(a, nan=0.0)
-        n = float(np.linalg.norm(a))
-        if n < 1e-6:
-            return np.zeros(3)
-        mag = self.game.rules.max_dv(self.role) * min(n, 1.0) ** self.action_power
-        dv_rsw = a / n * mag
-        return rsw_basis(self.game.r(self.role), self.game.v(self.role)).T @ dv_rsw
+        return action_to_dv(self.game, self.role, action, self.action_power)
 
     def _refresh_need(self):
         g = self.game

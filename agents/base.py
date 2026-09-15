@@ -55,6 +55,40 @@ class RandomAgent(Agent):
         return rsw_to_eci_dv(game, side, d * mag)
 
 
+class PoolAgent(Agent):
+    """對手池：每局開始依機率抽一個成員（self-play league / curriculum 混合對手）。
+
+    成員用規格描述（字串 / dict / "sb3:path"），第一次抽到才建構，同一行程內重複使用。
+    """
+    name = "pool"
+
+    def __init__(self, specs, probs=None, seed=None):
+        self.specs = list(specs)
+        p = np.ones(len(self.specs)) if probs is None else np.asarray(probs, dtype=float)
+        self.probs = p / p.sum()
+        self.rng = np.random.default_rng(seed)
+        self._agents = {}
+        self.current = None
+
+    def _get(self, i):
+        if i not in self._agents:
+            from agents import make_agent
+            self._agents[i] = make_agent(self.specs[i])
+        return self._agents[i]
+
+    def reset(self, seed=None):
+        if seed is not None:
+            self.rng = np.random.default_rng(seed)
+        i = int(self.rng.choice(len(self.specs), p=self.probs))
+        self.current = self._get(i)
+        self.current.reset(seed=None if seed is None else seed + 7)
+
+    def act(self, game, side):
+        if self.current is None:
+            self.reset()
+        return self.current.act(game, side)
+
+
 class CallableAgent(Agent):
     """把 `fn(game, side) -> dv` 包成 Agent。"""
 

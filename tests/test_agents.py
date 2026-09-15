@@ -1,0 +1,65 @@
+"""解析 / 搜尋 agent 與對打評測系統的測試（小規模、決定性）。"""
+import math
+
+import numpy as np
+
+from agents import make_agent
+from agents.analytic import orbit_survives, pursuer_need
+from evaluation.tournament import make_games, markdown_report, run_tournament
+from game.core import Game
+from game.rules import Rules
+from physics.frames import rsw_basis
+
+NEAR_P = {"sma": 6978.0, "ecc": 0.0, "inc": 51.6, "raan": 10.0, "aop": 0.0, "ta": 0.0}
+NEAR_E = {"sma": 7010.0, "ecc": 0.001, "inc": 51.8, "raan": 10.3, "aop": 0.0, "ta": 4.0}
+
+
+def _play(P, E, rules, p=NEAR_P, e=NEAR_E):
+    g = Game.from_elements(rules, p, e)
+    while not g.done:
+        a = P if g.mover == "pursuer" else E
+        g.play_turn(a.act(g, g.mover))
+    return g
+
+
+def test_lambert_pursuer_captures_passive_target():
+    g = _play(make_agent("lambert_pursuer"), make_agent("coast"), Rules())
+    assert g.outcome == "capture", g.summary()
+    assert g.used["pursuer"] <= Rules().fuel_pursuer_mps
+
+
+def test_orbit_survives_detects_deorbit_burn():
+    g = Game.from_elements(Rules(), NEAR_P, NEAR_E)
+    retro = rsw_basis(g.r("pursuer"), g.v("pursuer")).T @ np.array([0.0, -1500.0, 0.0])
+    assert not orbit_survives(g, "pursuer", retro)
+    assert orbit_survives(g, "pursuer", np.zeros(3))
+
+
+def test_pursuer_need_drops_after_following_solution():
+    g = Game.from_elements(Rules(t_max_sec=12000.0), NEAR_P, NEAR_E)
+    need0, _ = pursuer_need(g)
+    assert math.isfinite(need0)
+    dv = make_agent("lambert_pursuer").act(g, "pursuer")
+    g.play_turn(dv)
+    g.play_turn(np.zeros(3))
+    need1, _ = pursuer_need(g)
+    assert need1 < need0
+
+
+def test_search_agents_return_legal_moves():
+    rules = Rules(max_dv_pursuer_mps=200.0, max_dv_evader_mps=100.0, fuel_pursuer_mps=800.0,
+                  fuel_evader_mps=400.0, window_sec=600.0, t_max_sec=3000.0)
+    g = Game.from_elements(rules, NEAR_P, NEAR_E)
+    dv = make_agent("minimax_pursuer").act(g, "pursuer")
+    assert np.linalg.norm(dv) <= 200.0 + 1e-6
+    g.play_turn(dv)
+    dv = make_agent("minimax_evader_fast").act(g, "evader")
+    assert np.linalg.norm(dv) <= 100.0 + 1e-6
+
+
+def test_tournament_runs_and_reports():
+    games = make_games(2, "default", "near_coplanar", seed=1)
+    res = run_tournament(["lambert_pursuer"], ["coast", "random"], games, workers=1, progress=False)
+    assert len(res) == 4
+    md = markdown_report(res)
+    assert "lambert_pursuer" in md and "coast" in md

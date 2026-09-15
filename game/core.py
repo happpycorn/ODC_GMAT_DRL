@@ -162,6 +162,7 @@ class Game:
             "dv_mps": mag, "r_before": r_b, "v_before": v_b, "coast_sec": float(t_el),
             "window_min_dist_km": float(dmin), "t_window_min": t0 + float(t_dmin),
             "distance_after_km": self.distance(), "outcome": self.outcome,
+            "rp_after": rp.copy(), "vp_after": vp.copy(), "re_after": re.copy(), "ve_after": ve.copy(),
         }
         self.history.append(rec)
         self.turn += 1

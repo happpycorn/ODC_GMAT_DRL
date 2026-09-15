@@ -93,6 +93,20 @@ def _first_below(p0, v0, p1, v1, h, level):
     if fb < best:
         best = fb
         best_s = b
+    # 高相對速度（逆行交會 ~15 km/s）時，捕獲球可能整個落在兩個取樣點之間：取樣點都 > level，
+    # 但精修後的最小值 <= level。回頭在「最小值前一個取樣點 → 最小值」之間二分找第一次穿越。
+    if hit < 0.0 and level > 0.0 and best <= level:
+        lo = math.floor(best_s * N_SAMPLES) / N_SAMPLES
+        if lo >= best_s:
+            lo = max(0.0, lo - 1.0 / N_SAMPLES)
+        hi = best_s
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            if _nrm(_hermite(p0, v0, p1, v1, h, mid)) <= level:
+                hi = mid
+            else:
+                lo = mid
+        hit = hi
     return hit, best, best_s
 
 

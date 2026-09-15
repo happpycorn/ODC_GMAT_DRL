@@ -35,6 +35,25 @@ def test_mid_window_flyby_is_captured():
     assert np.linalg.norm(rp1 - re1) <= 5.0 + 1e-3
 
 
+def test_high_speed_head_on_pass_is_captured():
+    """逆行交會（相對速度 ~15 km/s）：一個取樣間隔就飛過數十公里，捕獲球可能落在兩個取樣點之間。
+
+    2026-09-15 對打評測抓到：wild 家族有「最近距離 0.0 km 卻判超時」的局——舊版只在取樣點
+    檢查是否 <= 半徑，最小值精修後找到的真正最近點沒回頭補判捕獲。
+    """
+    rp, vp = get_r0_v0(7000.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    re_, ve_ = get_r0_v0(7000.0, 0.0, 180.0, 0.0, 0.0, 0.0)   # 同軌道面逆行，同位置
+    # 把 evader 往回推 150 秒（沿自己的逆行軌道）：從 pursuer 正前方迎面而來
+    re0, ve0 = get_r0_v0(7000.0, 0.0, 180.0, 0.0, 0.0, -150.0 / 5828.5 * 360.0)
+    rp0, vp0 = get_r0_v0(7000.0, 0.0, 0.0, 0.0, 0.0, -150.0 / 5828.5 * 360.0)
+    re0 = re0 + np.array([0.0, 0.0, 1.0])                         # 1 km 平面外偏移
+    dense = _dense_min_dist(rp0, vp0, re0, ve0, 300.0, step=0.05)
+    assert dense < 5.0
+    *_, t_ev, ev, dmin, _ = coast_pair(rp0, vp0, re0, ve0, 300.0, 60.0, EARTH_MU, 0, 5.0, RE_VAL)
+    assert ev == EV_CAPTURE, (dense, dmin)
+    assert 100.0 < t_ev < 200.0
+
+
 def test_min_distance_matches_dense_sampling():
     rng = np.random.default_rng(3)
     for _ in range(10):
