@@ -44,9 +44,14 @@ uv run python tools/gmat_verify.py --pursuer lambert_pursuer --evader dv_evader
 
 # Self-play 訓練（BC 暖啟動 → curriculum → league），產物在 runs/<name>/
 uv run python train_selfplay.py --name sp1 --envs 12 --iters 12
+# 挑最好的快照確認評測後部署到 models/
+uv run python tools/promote_model.py --run sp1 --games 60
+
+# 規則平衡掃描（規則網格上的追者勝率地圖）
+uv run python tools/balance_sweep.py --axis max_dv_evader_mps=150,375,750,1500 --axis fuel_evader_mps=750,1500,3000
 ```
 
-Agent 規格字串：`coast`、`random`、`lambert_pursuer`、`lambert_pursuer_fast`、`dv_evader`、`dv_evader_fast`、`minimax_pursuer`、`minimax_evader`、`minimax_evader_fast`、`sb3:<模型.zip>`，或 JSON（例 `{"name":"lambert_pursuer","time_weight_mps":60}`、`{"name":"pool","specs":[...]}`）。
+Agent 規格字串：`coast`、`random`、`lambert_pursuer`、`lambert_pursuer_fast`、`dv_evader`、`dv_evader_fast`、`minimax_pursuer`、`minimax_evader`、`minimax_evader_fast`、`rollout_pursuer`、`rollout_evader`、`sb3:<模型.zip>`，或 JSON（例 `{"name":"lambert_pursuer","time_weight_mps":60}`、`{"name":"pool","specs":[...]}`）。
 
 ---
 
@@ -71,6 +76,7 @@ agents/            策略
   base.py            Agent 介面、coast、random、PoolAgent（對手池）
   analytic.py        LambertPursuer、DvEvader、存活檢查/救命推力、追擊所需 Δv
   search.py          2-ply 極小極大（實驗性）
+  rollout.py         Rollout 規劃器：候選脈衝 × 對手模型推演到終局，挑最壞情況最好
   rl.py              SB3Agent（訓練好的模型當 agent）
 envs/final_env.py  gym 包裝：單 agent + 可插拔對手、role 可隨機、勢能型塑形
 evaluation/        對打評測系統

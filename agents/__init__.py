@@ -21,7 +21,14 @@ REGISTRY = {
     "minimax_pursuer": MinimaxPursuer,
     "minimax_evader": MinimaxEvader,
     "minimax_evader_fast": lambda **kw: MinimaxEvader(directions="axes", mags=(1.0,), reply_weights=(0.0,), **kw),
+    "rollout_pursuer": lambda **kw: _rollout("pursuer", **kw),
+    "rollout_evader": lambda **kw: _rollout("evader", **kw),
 }
+
+
+def _rollout(side, **kw):
+    from agents.rollout import RolloutPlanner
+    return RolloutPlanner(side, **kw)
 
 
 def make_agent(spec) -> Agent:

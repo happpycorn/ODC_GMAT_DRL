@@ -21,9 +21,10 @@
 | 6 | 演練、規則公告後鎖定、凍結 | ☐ | HAP-55 |
 
 ## 待辦（依優先序）
-- [ ] 監看 sp1 訓練；RL 對解析基準的勝率曲線（runs/sp1/metrics.jsonl）
-- [ ] 規則平衡掃描：追/躲單發上限比 × 燃料比 × 捕獲半徑 → 追者勝率地圖（當天查表）
-- [ ] 改進極小極大葉值（用全程 need 或 rollout 值）
+- [ ] 監看 sp3 訓練（guided 追者 + BC 後重設探索幅度）；RL 對解析基準的勝率曲線（runs/sp3/metrics.jsonl）→ promote_model
+- [x] 規則平衡掃描工具（tools/balance_sweep.py）；第一張地圖：躲者單發上限 × 躲者燃料
+- [x] Rollout 規劃器（agents/rollout.py）取代極小極大當 copilot 強腦 —— 待評測
+- [ ] 評測 rollout_pursuer / rollout_evader vs 解析 agent
 - [ ] 追者「最小化最近距離」模式（若官方計分看距離）
 - [ ] 回合內多發的規則變體（若官方允許）
 - [ ] 規則公告（HAP-50）→ `configs/rules_final.json` → 重跑評測 → 微調 RL → 凍結 `models/`

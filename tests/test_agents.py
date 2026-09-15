@@ -57,6 +57,14 @@ def test_search_agents_return_legal_moves():
     assert np.linalg.norm(dv) <= 100.0 + 1e-6
 
 
+def test_rollout_planner_picks_legal_move_and_captures_passive_target():
+    rules = Rules(t_max_sec=6000.0)
+    P = make_agent({"name": "rollout_pursuer", "opponents": ["coast"],
+                    "candidates": ["lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 300.0}]})
+    g = _play(P, make_agent("coast"), rules)
+    assert g.outcome == "capture", g.summary()
+
+
 def test_tournament_runs_and_reports():
     games = make_games(2, "default", "near_coplanar", seed=1)
     res = run_tournament(["lambert_pursuer"], ["coast", "random"], games, workers=1, progress=False)

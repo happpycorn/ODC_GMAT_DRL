@@ -108,7 +108,7 @@ def collect_bc(role, args, seed):
     return X, Y
 
 
-def bc_pretrain(model, X, Y, epochs, batch=512, lr=1e-3, log=print):
+def bc_pretrain(model, X, Y, epochs, batch=512, lr=1e-3, log=print, log_std_reset=-1.0):
     import torch
     policy = model.policy
     opt = torch.optim.Adam(policy.parameters(), lr=lr)
@@ -131,6 +131,12 @@ def bc_pretrain(model, X, Y, epochs, batch=512, lr=1e-3, log=print):
             mse_tot += float(mse.detach()) * len(idx)
         if ep % max(1, epochs // 5) == 0 or ep == epochs - 1:
             log(f"    BC epoch {ep:3d}  nll={tot / n:.3f}  mse={mse_tot / n:.4f}")
+    # NLL 會把 log_std 一路壓到很小（目標是常數時 std→0），PPO 接手後幾乎不探索。
+    # BC 只該決定「平均動作」，探索幅度重設回初始值（sp2 第一次跑時 nll 掉到 -4.4 才發現）。
+    if hasattr(policy, "log_std"):
+        with torch.no_grad():
+            policy.log_std.fill_(log_std_reset)
+        log(f"    BC 後 log_std 重設為 {log_std_reset}")
 
 
 # ---------------------------------------------------------------------------- eval
