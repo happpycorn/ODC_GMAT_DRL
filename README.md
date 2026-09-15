@@ -1,18 +1,22 @@
 # ODC_GMAT_DRL —— 軌道設計競賽「決賽」追逃戰
 
-第一屆軌道設計競賽（TASA / 淡江）**決賽（四強賽）** 的物理、解析策略、DRL 訓練與當天作戰工具。初賽 9/5 已晉級（57 隊取前 8）；決賽 **2026-11-09 @ 大臺南會展中心**。
+第一屆軌道設計競賽（TASA / 淡江）**決賽（四強賽）** 的物理、解析/推演策略、DRL 訓練與當天作戰工具。初賽 9/5 已晉級（57 隊取前 8）；決賽 **2026-11-09 @ 大臺南會展中心**。
 
 - **怎麼用** → 這份
 - **問題本質、理論、為什麼這樣做、實測教訓** → [METHODOLOGY.md](METHODOLOGY.md)
+- **每個實驗量到什麼（E1–E12）** → [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
 - **當天流程** → [CONTEST_DAY_FINAL.md](CONTEST_DAY_FINAL.md)
-- **做到哪、接下來做什麼** → [ROADMAP.md](ROADMAP.md)（進度也同步在 Linear 專案 `ODC_GMAT_DRL`）
-- **每個實驗量到什麼** → [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
+- **做到哪、接下來做什麼** → [ROADMAP.md](ROADMAP.md)（進度同步在 Linear 專案 `ODC_GMAT_DRL`）
 
 ---
 
 ## 決賽賽制（一段話）
 
 兩艘太空船在地球重力場下**追逐 vs 躲避**，當天**抽籤**決定我方角色，**回合交替**下機動指令。追者在時間+燃料限制內追上即勝；躲者撐到時限即勝。電競模式、會場公用電腦下指令、GMAT 模擬。**詳細規則數字官方尚未公告**——所有數字集中在 `game/rules.py`，並用規則分布訓練/評測。
+
+## 目前結論（一段話）
+
+當天主腦是 **rollout 規劃器**（候選脈衝 × 對手模型推演到終局；對稱規則下追者 54–57%、躲者存活 72–81%，決策 ~140 ms）。RL self-play 持平解析專家但沒有超越，當 rollout 的候選/對手模型也沒有增益。**勝負主要由雙方總燃料比決定**（追者燃料約 2× 躲者才有利），規則一公布先查表。copilot 會把所有大腦的推演結果排序並標出推薦。
 
 ---
 
@@ -21,38 +25,43 @@
 ```bash
 pip install uv
 uv sync            # 每次 git pull 後跑一次
-uv run pytest      # 43 項；有裝 GMAT 的機器會多跑 GMAT 重播一致性測試
+uv run pytest      # 58 項；有裝 GMAT 的機器會多跑 GMAT 重播一致性測試
 ```
 
-GMAT（只用於驗證，不在訓練迴圈裡）預設路徑 `~/software/GMAT/GMAT/R2026a/bin/GmatConsole`，可用環境變數 `GMAT_CONSOLE` 覆寫。
+GMAT（只用於驗證/彩排，不在訓練迴圈裡）預設路徑 `~/software/GMAT/GMAT/R2026a/bin/GmatConsole`，可用環境變數 `GMAT_CONSOLE` 覆寫。
 
 ---
 
 ## 常用指令
 
 ```bash
-# 對打評測：追者 × 躲者 × 同一批隨機（規則, 幾何），輸出 reports/<name>.md
-uv run python evaluate.py --pursuers lambert_pursuer,minimax_pursuer \
-    --evaders coast,random,dv_evader,minimax_evader_fast --games 60 --rules default --scenario mixed
-
-# 當天 copilot：局勢檔 → 戰況 + 建議脈衝（ECI/VNB/RSW）+ 推演 + GMAT 驗證腳本
+# 當天 copilot：局勢檔 → 戰況 + 各大腦建議（ECI/VNB/RSW）+ 推演 + ★ 推薦 + GMAT 驗證腳本
 uv run python copilot.py init state.json
+uv run python copilot.py import state.json GMAT_report.txt --pursuer-ship ShipP --evader-ship ShipE --mover pursuer
 uv run python copilot.py advise state.json --gmat burn.script --verify
-uv run python copilot.py drill --role evader --opponent lambert_pursuer     # 整場演練
+uv run python copilot.py drill --role evader --opponent rollout_pursuer            # 整場演練（無 GMAT）
+
+# 當天流程彩排：GMAT 當真實世界，每回合 GMAT 重播 → import → advise → 下指令
+uv run python tools/dress_rehearsal.py --role pursuer --opponent dv_evader
+
+# 對打評測：追者 × 躲者 × 同一批隨機（規則, 幾何），輸出 reports/<name>.md
+uv run python evaluate.py --pursuers "lambert_pursuer;rollout_pursuer" \
+    --evaders "dv_evader;rollout_evader;escape_evader" --games 40 --rules ranges --scenario mixed
+uv run python evaluate.py --rules configs/rulesets/symmetric.json ...      # 指定規則集
+
+# 規則平衡地圖 / exploitability
+uv run python tools/balance_sweep.py --axis max_dv_evader_mps=150,375,750,1500 --axis fuel_evader_mps=750,1500,3000
+uv run python tools/exploitability.py --target rollout_pursuer --role pursuer --games 16
 
 # GMAT 一致性：整局機動丟進 GMAT 重播、逐回合比位置
 uv run python tools/gmat_verify.py --pursuer lambert_pursuer --evader dv_evader
 
-# Self-play 訓練（BC 暖啟動 → curriculum → league），產物在 runs/<name>/
-uv run python train_selfplay.py --name sp1 --envs 12 --iters 12
-# 挑最好的快照確認評測後部署到 models/
-uv run python tools/promote_model.py --run sp1 --games 60
-
-# 規則平衡掃描（規則網格上的追者勝率地圖）
-uv run python tools/balance_sweep.py --axis max_dv_evader_mps=150,375,750,1500 --axis fuel_evader_mps=750,1500,3000
+# Self-play 訓練（BC → curriculum → league）與部署
+uv run python train_selfplay.py --name sp4 --envs 12 --iters 12
+uv run python tools/promote_model.py --run sp4 --games 60
 ```
 
-Agent 規格字串：`coast`、`random`、`lambert_pursuer`、`lambert_pursuer_fast`、`dv_evader`、`dv_evader_fast`、`minimax_pursuer`、`minimax_evader`、`minimax_evader_fast`、`rollout_pursuer`、`rollout_evader`、`sb3:<模型.zip>`，或 JSON（例 `{"name":"lambert_pursuer","time_weight_mps":60}`、`{"name":"pool","specs":[...]}`）。
+**Agent 規格字串**：`coast`、`random`、`lambert_pursuer`、`lambert_pursuer_fast`、`dv_evader`、`dv_evader_fast`、`escape_evader`、`adaptive_evader`、`minimax_pursuer`、`minimax_evader(_fast)`、`rollout_pursuer`、`rollout_evader`、`sb3:<模型.zip>`，或 JSON（例 `{"name":"rollout_pursuer","workers":8}`、`{"name":"pool","specs":[...]}`）。多個規格用 `;` 分隔。
 
 ---
 
@@ -68,32 +77,35 @@ physics/           軌道物理
   coast.py           雙船滑行 + 窗口內連續偵測捕獲/撞地/最近接近
   frames.py          RSW(LVLH)、VNB、rv2coe
 game/              純遊戲核心（與 gym 解耦；搜尋、評測、copilot 共用）
-  rules.py           Rules（佔位規則）+ RuleRanges（規則分布）
+  rules.py           Rules（佔位規則，含 capture_mode）+ RuleRanges（規則分布）
   scenarios.py       初始幾何家族（near_coplanar / inclined / wild / official_sample / default）
   core.py            Game：回合推進、Δv 裁切、燃料帳、勝負、歷程、中途快照
-  obs.py             RL 觀測（LVLH、正規化、規則參數、最近接近、追擊所需 Δv）
-  actions.py         RL action ↔ Δv
+  obs.py / actions.py  RL 觀測、action↔Δv（direct / guided）
+  state_io.py        GMAT 報表 → 局勢檔（含單位防呆）
 agents/            策略
-  base.py            Agent 介面、coast、random、PoolAgent（對手池）
-  analytic.py        LambertPursuer、DvEvader、存活檢查/救命推力、追擊所需 Δv
-  search.py          2-ply 極小極大（實驗性）
-  rollout.py         Rollout 規劃器：候選脈衝 × 對手模型推演到終局，挑最壞情況最好
-  rl.py              SB3Agent（訓練好的模型當 agent）
+  base.py            Agent 介面、coast、random、PoolAgent
+  analytic.py        LambertPursuer、DvEvader、EscapeEvader、存活檢查/救命推力、追擊所需 Δv
+  rollout.py         RolloutPlanner（★ 當天主腦，可平行）
+  adaptive.py        AdaptiveEvader（依規則切逃逸；實測不當預設）
+  search.py          2-ply 極小極大（實驗性，較弱）
+  rl.py              SB3Agent（含撞地防呆）
 envs/final_env.py  gym 包裝：單 agent + 可插拔對手、role 可隨機、勢能型塑形
 evaluation/        對打評測系統
-tools/             gmat_verify.py（GMAT 重播）、compare_lambert_poliastro.py
-configs/           rules_template.json（當天填 rules_final.json）
-reports/           評測報表（.md 進 git）
+tools/             gmat_verify、dress_rehearsal、balance_sweep、exploitability、promote_model、compare_lambert_poliastro
+configs/           rules_template.json、rulesets/（symmetric / pursuer_fuel_2x / evader_small_burn_big_fuel）
+models/            已部署 RL 模型（sp3）+ PROMOTED.md
+reports/           評測/彩排報表（.md 進 git）
+docs/EXPERIMENTS.md 實驗紀錄
 evaluate.py  copilot.py  train_selfplay.py
 tests/             pytest
 ```
 
 ---
 
-## 現況（2026-09-15）
+## 現況（2026-09-16）
 
-- ✅ 物理：vendored DOP853 + 自寫 Lambert / 攔截掃描 / 連續事件偵測；**GMAT 重播位置差 < 10 m**（degree 0/2/4）
-- ✅ 遊戲核心重構 + env 正確性修復（HAP-101）、物理工具箱（HAP-102）
-- ✅ 解析 agent + 對打評測系統（HAP-103）；預設規則下 LambertPursuer 對被動目標 92% 捕獲
-- ✅ copilot CLI（HAP-104）、當天手冊初版（HAP-55）
-- ⏳ self-play 訓練（HAP-54）進行中；決賽規則待官方公告（HAP-50）
+- ✅ 物理：自寫 Lambert / 攔截掃描 / 連續事件偵測；**GMAT 重播位置差 < 10 m**（degree 0/2/4）
+- ✅ 遊戲核心、解析 agent、**rollout 規劃器**、對打評測、規則平衡地圖（HAP-101/102/103/106）
+- ✅ self-play 管線與 sp3 訓練（持平專家）、RL × rollout 整合評測（無增益）（HAP-54/105）
+- ✅ exploitability 測試（HAP-108）、copilot（匯入、推演排序、GMAT 腳本）、當天手冊、GMAT 彩排工具（HAP-104/109/55）
+- ⏳ 決賽規則待官方公告（HAP-50）→ 公告後在正式規則上重跑關鍵評測並鎖定大腦
