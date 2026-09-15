@@ -65,6 +65,19 @@ def test_rollout_planner_picks_legal_move_and_captures_passive_target():
     assert g.outcome == "capture", g.summary()
 
 
+def test_rollout_parallel_matches_serial():
+    from agents.rollout import RolloutPlanner
+    rules = Rules(t_max_sec=5000.0, max_dv_evader_mps=300.0, fuel_evader_mps=600.0)
+    g = Game.from_elements(rules, NEAR_P, NEAR_E)
+    kw = dict(candidates=["lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 300.0}],
+              opponents=["coast", "dv_evader_fast"])
+    serial = RolloutPlanner("pursuer", **kw).evaluate(g, "pursuer")
+    parallel = RolloutPlanner("pursuer", workers=2, **kw).evaluate(g, "pursuer")
+    assert len(serial) == len(parallel)
+    for (dv_s, sc_s), (dv_p, sc_p) in zip(serial, parallel):
+        assert np.allclose(dv_s, dv_p) and np.allclose(sc_s, sc_p)
+
+
 def test_tournament_runs_and_reports():
     games = make_games(2, "default", "near_coplanar", seed=1)
     res = run_tournament(["lambert_pursuer"], ["coast", "random"], games, workers=1, progress=False)

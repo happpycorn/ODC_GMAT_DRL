@@ -5,15 +5,29 @@
 （解析/RL），我方後續交給 continuation 策略。成本 = 候選數 × 對手模型數 × 一場推演，
 適合 copilot 與小規模評測（每步數百 ms ~ 數秒），不適合當訓練對手。
 
+`workers > 1` 時各（候選, 對手模型）推演丟進常駐行程池平行跑（copilot 用；結果與序列版相同）。
+
 分數（我方視角，越大越好）：
   贏：1000 + 追者早抓到/剩油多、躲者剩油多且距離大 的小獎勵
   輸：追者看最近距離（越近越好）、躲者看撐多久（越久越好）
 """
+import json
 import math
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 
 from agents.base import Agent, rsw_to_eci_dv
+
+DEFAULTS = {
+    "pursuer": dict(
+        candidates=[{"name": "lambert_pursuer", "time_weight_mps": w} for w in (0.0, 10.0, 60.0, 300.0)],
+        opponents=["coast", "dv_evader_fast"], continuation="lambert_pursuer_fast"),
+    "evader": dict(
+        candidates=["dv_evader", "dv_evader_fast"],
+        opponents=["lambert_pursuer_fast", {"name": "lambert_pursuer_fast", "time_weight_mps": 60.0}],
+        continuation="dv_evader_fast"),
+}
 
 
 def outcome_score(h, side):
@@ -28,25 +42,60 @@ def outcome_score(h, side):
     return 500.0 * s["t_end"] / h.t_max
 
 
+def play_out(game, dv, side, cont, opp):
+    """從 game 開始：我方推 dv，之後我方交給 cont、對手交給 opp，下到結束，回傳分數。"""
+    opp.reset(seed=0)
+    h = game.clone()
+    h.history = []
+    h.play_turn(dv)
+    while not h.done:
+        a = cont if h.mover == side else opp
+        h.play_turn(a.act(h, h.mover))
+    return outcome_score(h, side)
+
+
+# ------------------------------------------------------------------ 平行化
+_WORKER_AGENTS = {}
+_POOL = {"pool": None, "n": 0}
+
+
+def _worker_agent(spec):
+    from agents import make_agent
+    key = json.dumps(spec, sort_keys=True, default=str)
+    if key not in _WORKER_AGENTS:
+        _WORKER_AGENTS[key] = make_agent(spec)
+    return _WORKER_AGENTS[key]
+
+
+def _rollout_task(args):
+    game, dv, side, cont_spec, opp_spec = args
+    return play_out(game, dv, side, _worker_agent(cont_spec), _worker_agent(opp_spec))
+
+
+def _pool(n):
+    if _POOL["pool"] is None or _POOL["n"] != n:
+        if _POOL["pool"] is not None:
+            _POOL["pool"].shutdown(cancel_futures=True)
+        _POOL["pool"] = ProcessPoolExecutor(max_workers=n)
+        _POOL["n"] = n
+    return _POOL["pool"]
+
+
 class RolloutPlanner(Agent):
     def __init__(self, side, candidates=None, opponents=None, continuation=None, aggregate="min",
-                 extra_rsw_fracs=(), name=None):
+                 extra_rsw_fracs=(), workers=0, name=None):
         from agents import make_agent
         self.side = side
-        defaults = {
-            "pursuer": dict(
-                candidates=[{"name": "lambert_pursuer", "time_weight_mps": w} for w in (0.0, 10.0, 60.0, 300.0)],
-                opponents=["coast", "dv_evader_fast"], continuation="lambert_pursuer_fast"),
-            "evader": dict(
-                candidates=["dv_evader", "dv_evader_fast"],
-                opponents=["lambert_pursuer_fast", {"name": "lambert_pursuer_fast", "time_weight_mps": 60.0}],
-                continuation="dv_evader_fast"),
-        }[side]
-        self.cand_agents = [make_agent(c) for c in (candidates or defaults["candidates"])]
-        self.opp_agents = [make_agent(o) for o in (opponents or defaults["opponents"])]
-        self.cont = make_agent(continuation or defaults["continuation"])
+        d = DEFAULTS[side]
+        self.cand_specs = list(candidates or d["candidates"])
+        self.opp_specs = list(opponents or d["opponents"])
+        self.cont_spec = continuation or d["continuation"]
+        self.cand_agents = [make_agent(c) for c in self.cand_specs]
+        self.opp_agents = [make_agent(o) for o in self.opp_specs]
+        self.cont = make_agent(self.cont_spec)
         self.aggregate = aggregate
         self.extra_rsw_fracs = tuple(extra_rsw_fracs)   # 額外候選：沿 ±S、+R 推這些比例的上限
+        self.workers = int(workers)
         self.name = name or f"rollout_{side}"
 
     def _candidates(self, game):
@@ -63,19 +112,22 @@ class RolloutPlanner(Agent):
                 out.append(c)
         return out
 
+    def evaluate(self, game, side):
+        """回傳 [(dv, 各對手模型分數 list)]，供 copilot 顯示。"""
+        cands = self._candidates(game)
+        if self.workers > 1:
+            g = game.clone()
+            g.history = []
+            tasks = [(g, dv, side, self.cont_spec, o) for dv in cands for o in self.opp_specs]
+            flat = list(_pool(self.workers).map(_rollout_task, tasks))
+            k = len(self.opp_specs)
+            return [(dv, flat[i * k:(i + 1) * k]) for i, dv in enumerate(cands)]
+        return [(dv, [play_out(game, dv, side, self.cont, o) for o in self.opp_agents]) for dv in cands]
+
     def act(self, game, side):
         assert side == self.side
         best_s, best_dv = -math.inf, np.zeros(3)
-        for dv in self._candidates(game):
-            scores = []
-            for opp in self.opp_agents:
-                opp.reset(seed=0)
-                h = game.clone()
-                h.play_turn(dv)
-                while not h.done:
-                    a = self.cont if h.mover == side else opp
-                    h.play_turn(a.act(h, h.mover))
-                scores.append(outcome_score(h, side))
+        for dv, scores in self.evaluate(game, side):
             s = min(scores) if self.aggregate == "min" else float(np.mean(scores))
             if s > best_s:
                 best_s, best_dv = s, dv

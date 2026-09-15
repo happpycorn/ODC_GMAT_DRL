@@ -144,7 +144,9 @@ def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
     g = game_from_state(st)
     side = st["role"]
     if not brains:
-        brains = list(DEFAULT_BRAINS[side])
+        workers = int(os.environ.get("COPILOT_WORKERS", max(1, min(8, (os.cpu_count() or 2) - 2))))
+        brains = [{"name": b, "workers": workers} if b in ("rollout_pursuer", "rollout_evader") else b
+                  for b in DEFAULT_BRAINS[side]]
         deployed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{side}.zip")
         if os.path.exists(deployed):              # tools/promote_model.py 部署的 RL 策略自動加入
             brains.append("sb3:" + deployed)
