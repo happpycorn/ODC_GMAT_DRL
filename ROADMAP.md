@@ -18,7 +18,7 @@
 | 3 | self-play 訓練（BC → curriculum → league） | ✅ sp3 完成：持平專家、未超越（E9） | HAP-54 |
 | 4 | RL × rollout 整合、決定 RL 當天角色 | ✅ 無增益 → 主腦純 rollout（E11） | HAP-105 |
 | 4.1 | 規則平衡地圖 → 當天查表 | ✅ 6 張地圖 + rollout 確認（E8、E10） | HAP-106 |
-| 4.2 | Exploitability 測試 | ☐ | HAP-108 |
+| 4.2 | Exploitability 測試 | ✅ rollout 追者對稱規則 +44（賽局結構）；逃逸躲者不採用當預設（E12） | HAP-108 |
 | 5 | copilot CLI + 當天手冊 | ✅ 初版 | HAP-104 / HAP-55 |
 | 5.1 | copilot 狀態匯入（GMAT 報表） | ⏳ | HAP-109 |
 | 6 | 規則公告 → 鎖定參數 → 演練 → 凍結 | ☐ 阻塞於 HAP-50 | HAP-50 / HAP-55 |
@@ -29,5 +29,6 @@
 - [ ] 對手風格辨識：從對手前幾回合行為挑對手模型（E11 顯示猜中對手 +9 個百分點）
 - [x] 平衡地圖六張 + rollout 確認（HAP-106）
 - [x] copilot `import` 讀 GMAT 報表、rollout 平行化（HAP-109）
-- [ ] Exploitability：rollout 大腦被針對時多弱（HAP-108）
+- [x] Exploitability：rollout 大腦被針對時多弱（HAP-108）
+- [ ] 規則公告後：在正式規則上重跑 E7/E11/E12 的關鍵對打（大腦選擇可能隨規則翻轉，例如逃逸躲者）
 - [ ] 規則公告（HAP-50）→ `configs/rules_final.json` → 重跑評測/平衡 → 微調 RL → 凍結 `models/`

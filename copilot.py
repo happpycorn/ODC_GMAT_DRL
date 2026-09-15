@@ -43,9 +43,13 @@ from physics.frames import rsw_basis, rv2coe, vnb_basis
 # 追者對 DvEvader 50%（LambertPursuer 17%）、躲者對 LambertPursuer 存活 93%，決策 ~140 ms
 DEFAULT_BRAINS = {"pursuer": ["rollout_pursuer", "lambert_pursuer",
                               {"name": "lambert_pursuer", "time_weight_mps": 60.0}],
-                  "evader": ["rollout_evader", "dv_evader"]}
-DEFAULT_OPP_MODELS = {"pursuer": ["coast", "dv_evader_fast", "dv_evader"],
-                      "evader": ["coast", "lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 60.0}]}
+                  # escape_evader 只當參考：燃料與單發上限都大且對稱時實測最強（88% vs 72%），
+                  # 但隨機規則下會輸 rollout（HAP-108，docs/EXPERIMENTS.md E12）
+                  "evader": ["rollout_evader", "dv_evader", "escape_evader"]}
+# 推演用的對手模型。躲者側加 rollout 追者：只用 Lambert 系模型時推演會過度樂觀（HAP-108 教訓）
+DEFAULT_OPP_MODELS = {"pursuer": ["coast", "dv_evader_fast", "dv_evader", "escape_evader"],
+                      "evader": ["coast", "lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 60.0},
+                                 "rollout_pursuer"]}
 
 
 # ------------------------------------------------------------------ 局勢檔
