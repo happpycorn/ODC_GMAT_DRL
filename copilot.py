@@ -39,8 +39,11 @@ from physics import EARTH_MU, RE_VAL, get_r0_v0
 from physics.coast import closest_approach
 from physics.frames import rsw_basis, rv2coe, vnb_basis
 
-DEFAULT_BRAINS = {"pursuer": ["lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 60.0}],
-                  "evader": ["dv_evader", "minimax_evader_fast"]}
+# 第一個是預設採用的大腦。rollout 規劃器是目前評測最強（reports/rollout_eval_default.md）：
+# 追者對 DvEvader 50%（LambertPursuer 17%）、躲者對 LambertPursuer 存活 93%，決策 ~140 ms
+DEFAULT_BRAINS = {"pursuer": ["rollout_pursuer", "lambert_pursuer",
+                              {"name": "lambert_pursuer", "time_weight_mps": 60.0}],
+                  "evader": ["rollout_evader", "dv_evader"]}
 DEFAULT_OPP_MODELS = {"pursuer": ["coast", "dv_evader_fast", "dv_evader"],
                       "evader": ["coast", "lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 60.0}]}
 

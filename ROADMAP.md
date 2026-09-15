@@ -23,8 +23,11 @@
 ## 待辦（依優先序）
 - [ ] 監看 sp3 訓練（guided 追者 + BC 後重設探索幅度）；RL 對解析基準的勝率曲線（runs/sp3/metrics.jsonl）→ promote_model
 - [x] 規則平衡掃描工具（tools/balance_sweep.py）；第一張地圖：躲者單發上限 × 躲者燃料
-- [x] Rollout 規劃器（agents/rollout.py）取代極小極大當 copilot 強腦 —— 待評測
-- [ ] 評測 rollout_pursuer / rollout_evader vs 解析 agent
+- [x] Rollout 規劃器（agents/rollout.py）取代極小極大當 copilot 強腦
+- [x] 評測 rollout_pursuer / rollout_evader：追者對 DvEvader 50%（Lambert 17%）、躲者對 Lambert 存活 93% → copilot 預設大腦
+- [x] capture_mode（continuous / endpoint）規則變體
+- [ ] RL 策略當 rollout 的候選或對手模型（sp3 完成後）
+- [ ] rollout 在隨機規則分布與 official_sample 幾何下的評測
 - [ ] 追者「最小化最近距離」模式（若官方計分看距離）
 - [ ] 回合內多發的規則變體（若官方允許）
 - [ ] 規則公告（HAP-50）→ `configs/rules_final.json` → 重跑評測 → 微調 RL → 凍結 `models/`
