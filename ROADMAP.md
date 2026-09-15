@@ -15,9 +15,9 @@
 | 1 | 物理工具箱：numba Lambert、追擊所需 Δv、座標系 | ✅ 09-15 | HAP-102 |
 | 2 | 解析 agent + 對打評測 + rollout 規劃器 | ✅ 09-15 | HAP-103 |
 | 2.5 | GMAT 重播一致性（< 10 m） | ✅ 待官方 ForceModel | HAP-56 |
-| 3 | self-play 訓練（BC → curriculum → league） | ⏳ sp3 進行中 | HAP-54 |
-| 4 | RL × rollout 整合、決定 RL 當天角色 | ☐ | HAP-105 |
-| 4.1 | 規則平衡地圖 → 當天查表 | ⏳ | HAP-106 |
+| 3 | self-play 訓練（BC → curriculum → league） | ✅ sp3 完成：持平專家、未超越（E9） | HAP-54 |
+| 4 | RL × rollout 整合、決定 RL 當天角色 | ⏳ 部署 + 評測中 | HAP-105 |
+| 4.1 | 規則平衡地圖 → 當天查表 | ✅ 6 張地圖 + rollout 確認（E8、E10） | HAP-106 |
 | 4.2 | Exploitability 測試 | ☐ | HAP-108 |
 | 5 | copilot CLI + 當天手冊 | ✅ 初版 | HAP-104 / HAP-55 |
 | 5.1 | copilot 狀態匯入（GMAT 報表） | ⏳ | HAP-109 |
@@ -25,8 +25,8 @@
 | — | 規則變體：一回合多發 | ☐ 視 HAP-50 | HAP-107 |
 
 ## 近期待辦
-- [ ] sp3 完成 → `tools/promote_model.py` → RL vs rollout vs 解析評測（HAP-105）
-- [ ] 平衡地圖：捕獲半徑 × 窗口、追者上限 × 燃料（執行中）；先手、capture_mode（HAP-106）
-- [ ] copilot `import` 讀 GMAT 報表（HAP-109）
-- [ ] rollout 候選平行化，完整建議 < 3 s（HAP-109）
+- [ ] sp3 → `tools/promote_model.py`（執行中）→ RL 當 rollout 候選/對手模型的評測（HAP-105）
+- [x] 平衡地圖六張 + rollout 確認（HAP-106）
+- [x] copilot `import` 讀 GMAT 報表、rollout 平行化（HAP-109）
+- [ ] Exploitability：rollout 大腦被針對時多弱（HAP-108）
 - [ ] 規則公告（HAP-50）→ `configs/rules_final.json` → 重跑評測/平衡 → 微調 RL → 凍結 `models/`

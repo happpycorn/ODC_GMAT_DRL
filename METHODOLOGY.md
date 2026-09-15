@@ -120,6 +120,11 @@
 - **捕獲半徑與窗口長度幾乎不影響勝負**（1 → 20 km、120 → 900 s 都只差 ±5 個百分點，reports/balance_capture_window.md）：追者的瓶頸是燃料，不是精度或節奏。
 - **追者燃料要約 2× 躲者才有利**（追者 6000/躲者 3000 → 88%；1500 → 0%，reports/balance_pursuer_dv_fuel.md）。燃料少時單發上限大反而更差（大推力很快燒光）。這與 Δv-based 追逃賽局文獻的結論一致：**勝負由雙方可用 Δv 的比值主導**。
 
+### RL self-play 的實際結果（sp3，docs/EXPERIMENTS.md E9）
+- 12 輪 league、~6.6M 步後，RL 追者/躲者都在**BC 暖啟動的專家水準附近震盪**，沒有明顯超越 LambertPursuer / DvEvader，更遠不及 rollout 規劃器。
+- 我們的解讀：(1) 攔截精度必須交給 Lambert，所以 RL 能調的只剩少數策略參數，上限接近專家；(2) 勝負由很久以後的燃料消耗決定，稀疏的終局獎勵 + ~40 步的長 episode 讓信用分配很難，勢能塑形用的短 horizon need 又會飽和；(3) 推演（rollout）直接用精確模擬器做前瞻，在「模擬器完全已知、回合制」的設定下天然佔優——這其實就是 AlphaZero 類方法強於純 model-free RL 的同一個理由。
+- 定位調整：**當天主腦 = rollout 規劃器；RL 改當候選產生器 / 對手模型**（HAP-105），而不是反過來。這個結論本身也是方法論說明的好素材：我們有試、有數字、知道為什麼。
+
 ### GMAT 一致性
 - 整局機動丟進 GMAT 重播（RK89、JGM2、Order=0），degree 0/2/4 位置差都 < 10 m。
 - 坑：GMAT `Propagate ... {Ship.ElapsedSecs = X}` 的 X 是**從該指令開始**算的，報表的 ElapsedSecs 才是從初始 epoch。
