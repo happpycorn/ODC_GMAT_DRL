@@ -174,7 +174,33 @@ def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
                 oa.reset(seed=0)
                 entry["rollouts"].append({"opponent": name, **rollout(g, side, dv, agent, oa)})
         out["advice"].append(entry)
+    if rollouts and out["advice"]:
+        out["ranking"] = rank_advice(out["advice"], side)
     return out
+
+
+def _rollout_value(r, side):
+    """推演結果的分數（我方視角，越大越好）：贏 > 輸；贏時早抓到/剩油多，輸時追者看距離、躲者看撐多久。"""
+    if r["we_win"]:
+        fuel_used = r["used_pursuer_mps"] if side == "pursuer" else r["used_evader_mps"]
+        return 1000.0 - 1e-3 * fuel_used - (1e-3 * r["t_end"] if side == "pursuer" else 0.0)
+    if side == "pursuer":
+        return -min(r["min_dist_km"], 1e5)
+    return r["t_end"] / 100.0
+
+
+def rank_advice(advice, side):
+    """依推演表排序大腦：先看「對所有對手模型的最壞結果」，再看平均（HAP-108 教訓：預設大腦
+    自己用的對手模型較弱，第一建議不一定是推演表上最好的）。"""
+    rows = []
+    for a in advice:
+        vals = [_rollout_value(r, side) for r in a["rollouts"]]
+        if not vals:
+            continue
+        rows.append({"brain": a["brain"], "worst": min(vals), "mean": float(np.mean(vals)),
+                     "wins": sum(r["we_win"] for r in a["rollouts"]), "n": len(vals)})
+    rows.sort(key=lambda x: (x["worst"], x["mean"]), reverse=True)
+    return rows
 
 
 def print_advice(out, side):
@@ -201,6 +227,12 @@ def print_advice(out, side):
         for r in a["rollouts"]:
             print(f"    vs {str(r['opponent']):<40} → {r['outcome']:<14} {'WIN ' if r['we_win'] else 'LOSE'} "
                   f"t={r['t_end']:.0f}s  最近 {r['min_dist_km']:.1f} km  燃料用 P {r['used_pursuer_mps']:.0f} / E {r['used_evader_mps']:.0f}")
+    if out.get("ranking"):
+        print("=" * 78)
+        print("推演表排序（先比最壞情況、再比平均）：")
+        for i, row in enumerate(out["ranking"]):
+            mark = "★ 推薦" if i == 0 else "      "
+            print(f"  {mark} {str(row['brain']):<50} 贏 {row['wins']}/{row['n']} 個對手模型")
 
 
 def _parse_specs(s):
@@ -322,6 +354,9 @@ def main(argv=None):
             out = advise(st, brains, None, not args.no_rollout)
             print_advice(out, side)
             k = 0
+            if out.get("ranking"):                    # 預設採用推演表排序第一的大腦
+                top = out["ranking"][0]["brain"]
+                k = next(i for i, a in enumerate(out["advice"]) if a["brain"] == top)
             if args.interactive:
                 ans = input(f"採用第幾個大腦的建議？[0-{len(out['advice']) - 1}，或輸入 eci m/s 三個數字] ").strip()
                 parts = ans.split()

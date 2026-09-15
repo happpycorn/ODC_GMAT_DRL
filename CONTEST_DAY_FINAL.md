@@ -64,7 +64,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
    - `純滑行最近接近`：< 捕獲半徑 → 追者**不用推**（省油），躲者**必須推**。
    - `追者攔截所需 Δv（短程）` vs `追者剩餘燃料/單發上限`：need < 單發上限 → 追者這回合可能直接收掉。
    - `近地點高度` / `不推也安全`：任何一方 False → 那方不處理就會再入。
-4. **選建議**：預設採用推演結果「對最強對手模型（追者看 `dv_evader`/`escape_evader`、躲者看 `rollout_pursuer`）仍 WIN」的那個大腦；都 LOSE 就選最近距離最小（追者）/最大（躲者）的。
+4. **選建議**：copilot 最後會印「推演表排序」，**★ 推薦** 那個就是「對所有對手模型最壞結果最好」的大腦（drill 模式也預設採用它）。原則：採用推演結果「對最強對手模型（追者看 `dv_evader`/`escape_evader`、躲者看 `rollout_pursuer`）仍 WIN」的那個大腦；都 LOSE 就選最近距離最小（追者）/最大（躲者）的。
    ⚠️ 預設大腦（rollout）自己內部用的對手模型較弱，**它的第一建議不一定是推演表上最好的**——實測預設幾何下 rollout 躲者建議不動、推演對 rollout 追者 LOSE，而 `escape_evader` 推演 WIN。以推演表為準，不要只看第一個大腦。
 5. **先驗證再下**（時間允許）：
    ```bash
