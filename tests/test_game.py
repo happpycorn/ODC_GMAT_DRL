@@ -67,6 +67,36 @@ def test_retro_burn_crashes_pursuer():
     assert g.t < 3000.0
 
 
+def _flyby_game(mode):
+    """兩船在窗口中間（~150 s）以 1 km/s 穿過彼此，窗口末已分開很遠。"""
+    rp, vp = get_r0_v0(7000.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+    re, ve = rp + np.array([0.0, 0.0, 150.0]), vp + np.array([0.0, 0.0, -1.0])
+    return Game(Rules(window_sec=300.0, capture_mode=mode), rp, vp, re, ve)
+
+
+def test_capture_mode_continuous_vs_endpoint():
+    g = _flyby_game("continuous")
+    g.play_turn(np.zeros(3))
+    assert g.outcome == "capture"
+    g = _flyby_game("endpoint")
+    g.play_turn(np.zeros(3))
+    assert g.outcome is None and g.min_dist < 5.0      # 中途有進球，但 endpoint 規則不算
+    with pytest.raises(ValueError):
+        Rules(capture_mode="sometimes")
+
+
+def test_lambert_pursuer_endpoint_mode_captures_passive_target():
+    from agents import make_agent
+    R = Rules(capture_mode="endpoint")
+    p = {"sma": 6978.0, "ecc": 0.0, "inc": 51.6, "raan": 10.0, "aop": 0.0, "ta": 0.0}
+    e = {"sma": 7010.0, "ecc": 0.001, "inc": 51.8, "raan": 10.3, "aop": 0.0, "ta": 4.0}
+    g = Game.from_elements(R, p, e)
+    P, E = make_agent("lambert_pursuer"), make_agent("coast")
+    while not g.done:
+        g.play_turn((P if g.mover == "pursuer" else E).act(g, g.mover))
+    assert g.outcome == "capture", g.summary()
+
+
 def test_clone_is_independent():
     g = _game()
     h = g.clone()

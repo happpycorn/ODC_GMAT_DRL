@@ -17,7 +17,7 @@ import numpy as np
 
 from game.rules import SIDES, Rules, other
 from physics import EARTH_MU, RE_VAL, get_r0_v0, orbital_period
-from physics.coast import EV_CAPTURE, EV_CRASH_E, EV_CRASH_P, coast_pair
+from physics.coast import EV_CAPTURE, EV_CRASH_E, EV_CRASH_P, EV_NONE, coast_pair
 from physics.frames import rsw_basis
 
 OUTCOME_WINNER = {
@@ -156,9 +156,13 @@ class Game:
 
         dt = self.next_window()
         R = self.rules
+        continuous = R.capture_mode == "continuous"
         rp, vp, re, ve, t_el, ev, dmin, t_dmin = coast_pair(
             self._r["pursuer"], self._v["pursuer"], self._r["evader"], self._v["evader"],
-            dt, R.substep_sec, self.mu, R.gravity_degree, R.capture_radius_km, self.crash_radius)
+            dt, R.substep_sec, self.mu, R.gravity_degree, R.capture_radius_km if continuous else -1.0,
+            self.crash_radius)
+        if not continuous and ev == EV_NONE and float(np.linalg.norm(rp - re)) <= R.capture_radius_km:
+            ev = EV_CAPTURE                      # endpoint 模式：只看回合結束瞬間
         self._r["pursuer"], self._v["pursuer"] = rp, vp
         self._r["evader"], self._v["evader"] = re, ve
         t0 = self.t

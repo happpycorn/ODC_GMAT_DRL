@@ -107,7 +107,12 @@ class LambertPursuer(Agent):
 
         # 已經在滑行中會進捕獲球（這個窗口內）→ 不動，省油
         if self.coast_if_captures:
-            d_ca, _, _ = closest_approach(rp, vp, re, ve, game.next_window(), 60.0, mu, gd)
+            if R.capture_mode == "endpoint":
+                rp_w, _ = propagate(mu, rp, vp, game.next_window(), gd)
+                re_w, _ = propagate(mu, re, ve, game.next_window(), gd)
+                d_ca = float(np.linalg.norm(rp_w - re_w))
+            else:
+                d_ca, _, _ = closest_approach(rp, vp, re, ve, game.next_window(), 60.0, mu, gd)
             if d_ca <= 0.8 * R.capture_radius_km:
                 return np.zeros(3)
 
@@ -116,8 +121,19 @@ class LambertPursuer(Agent):
             horizon = min(horizon, max(self.horizon_frac * horizon, game.next_window() + 120.0))
         if horizon <= 60.0:
             return np.zeros(3)
-        n_tof = int(np.clip(math.ceil(horizon / game.period("pursuer") * self.pts_per_period), 8, self.max_pts))
-        tofs, dvs, v1s, re_at, ve_at = intercept_scan(mu, gd, rp, vp, re, ve, 60.0, horizon, n_tof,
+        endpoint = R.capture_mode == "endpoint"
+        if endpoint:
+            # 只在回合結束瞬間判定捕獲 → 攔截時刻必須落在回合邊界（本窗口末、之後每個窗口末）
+            w = R.window_sec
+            first = game.next_window()
+            k_max = int((horizon - first) // w)
+            if k_max < 0:
+                return np.zeros(3)
+            tof_lo, tof_hi, n_tof = first, first + k_max * w, k_max + 1
+        else:
+            n_tof = int(np.clip(math.ceil(horizon / game.period("pursuer") * self.pts_per_period), 8, self.max_pts))
+            tof_lo, tof_hi = 60.0, horizon
+        tofs, dvs, v1s, re_at, ve_at = intercept_scan(mu, gd, rp, vp, re, ve, tof_lo, tof_hi, n_tof,
                                                       self.max_revs, safe_radius(game))
         dvs_mps = dvs * 1000.0
         if not np.any(np.isfinite(dvs_mps)):
@@ -139,12 +155,14 @@ class LambertPursuer(Agent):
         else:
             i = int(np.argmin(dvs_mps))
 
-        # 在選中的 TOF 鄰域精修最小 Δv
-        lo, hi = max(i - 1, 0), min(i + 1, len(tofs) - 1)
-        d, tof, v1 = _refine_tof(mu, gd, rp, vp, re_at[lo], ve_at[lo], tofs[lo], tofs[hi],
-                                 self.max_revs, safe_radius(game), 12)
-        if not math.isfinite(d) or d * 1000.0 > dvs_mps[i]:
-            tof, v1 = tofs[i], v1s[i]
+        # 在選中的 TOF 鄰域精修最小 Δv（endpoint 模式 TOF 被綁在回合邊界，不能精修）
+        tof, v1 = tofs[i], v1s[i]
+        if not endpoint:
+            lo, hi = max(i - 1, 0), min(i + 1, len(tofs) - 1)
+            d, tof_r, v1_r = _refine_tof(mu, gd, rp, vp, re_at[lo], ve_at[lo], tofs[lo], tofs[hi],
+                                         self.max_revs, safe_radius(game), 12)
+            if math.isfinite(d) and d * 1000.0 <= dvs_mps[i]:
+                tof, v1 = tof_r, v1_r
         if self.j2_shoot and gd > 0:
             r_t, _ = propagate(mu, re, ve, tof, gd)
             v1_s, miss = shoot_j2(mu, gd, rp, v1, r_t, tof, 6, 1e-3)
