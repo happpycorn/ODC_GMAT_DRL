@@ -94,6 +94,19 @@ def test_escape_evader_burns_twice_then_hands_over():
     assert g.outcome != "crash_evader"
 
 
+def test_adaptive_evader_picks_by_fuel_ratio():
+    from agents.adaptive import AdaptiveEvader
+    from agents.analytic import EscapeEvader
+    from agents.rollout import RolloutPlanner
+    a = AdaptiveEvader()
+    assert isinstance(a.choose(Rules()), EscapeEvader)                                  # 對稱 → 逃逸
+    assert isinstance(a.choose(Rules(fuel_pursuer_mps=6000.0)), RolloutPlanner)         # 追者 2× → rollout
+    g = Game.from_elements(Rules(first_mover="evader", t_max_sec=3000.0), NEAR_P, NEAR_E)
+    a.reset()
+    dv = a.act(g, "evader")
+    assert np.linalg.norm(dv) > 1000.0                                                   # 對稱規則開局推滿
+
+
 def test_tournament_runs_and_reports():
     games = make_games(2, "default", "near_coplanar", seed=1)
     res = run_tournament(["lambert_pursuer"], ["coast", "random"], games, workers=1, progress=False)

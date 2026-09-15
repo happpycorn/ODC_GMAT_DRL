@@ -160,7 +160,16 @@
 | rollout 追者 + EscapeEvader 對手模型 | 56% | 19% | 19% |
 
 - **修正後的結論**：加對手模型**沒用**，因為**單純的 EscapeEvader 本身就把 rollout 追者壓到 19%**——這不是「被讀心」，而是**燃料對稱時「開局立刻逃逸」近乎躲者的支配策略**，追者的候選集（任何 Lambert 解）都追不上（呼應 E8：燃料比主導勝負）。追者燃料 2× 時同一招就無效（E12 表中 88% / 88%）。
-- **反過來的收穫**：我們自己的 rollout 躲者（候選 = DvEvader 系）**沒有**立刻逃逸，所以不是最強的躲者 → 把 EscapeEvader 加進 rollout 躲者的候選集驗證中（`reports/hap108_escape_evader_*.md`）。
+- **反過來的收穫**：我們自己的 rollout 躲者（候選 = DvEvader 系）**沒有**立刻逃逸，所以不是最強的躲者。
+- **躲者驗證**（16 局，`reports/hap108_escape_evader_{symmetric,pursuer_fuel_2x}.md`；數字為躲者平均存活，對 Lambert + rollout 追者）：
+
+| 躲者 | 對稱燃料 | 追者燃料 2× |
+|---|---|---|
+| rollout 躲者 | 72% | **31%** |
+| EscapeEvader | **88%** | 12% |
+| rollout 躲者 + escape 候選 | 72% | 31% |
+
+- **結論**：(1) 逃逸打法**強烈依賴規則**——燃料對稱時最強、追者燃料多時最差；(2) 把 escape 塞進 rollout 候選**沒效**：rollout 躲者的對手模型是較弱的 Lambert 系追者，推演裡「省油也能贏」，分數偏好保留燃料，永遠不選燒光燃料的逃逸（**對手模型太弱 → 規劃過度樂觀**）。→ 改做 `AdaptiveEvader`：開局看「躲者燃料 / 追者燃料」，≥ 0.75 整場逃逸、否則 rollout；隨機規則分布上驗證中（`reports/hap108_adaptive_ranges.md`）。
 
 ## E10 用 rollout 大腦確認平衡結論
 - **產物**：`reports/rollout_rules_{symmetric,pursuer_fuel_2x,evader_small_burn_big_fuel}.md`（24 局，mixed 幾何）

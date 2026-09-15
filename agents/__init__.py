@@ -24,7 +24,13 @@ REGISTRY = {
     "minimax_evader_fast": lambda **kw: MinimaxEvader(directions="axes", mags=(1.0,), reply_weights=(0.0,), **kw),
     "rollout_pursuer": lambda **kw: _rollout("pursuer", **kw),
     "rollout_evader": lambda **kw: _rollout("evader", **kw),
+    "adaptive_evader": lambda **kw: _adaptive(**kw),
 }
+
+
+def _adaptive(**kw):
+    from agents.adaptive import AdaptiveEvader
+    return AdaptiveEvader(**kw)
 
 
 def _rollout(side, **kw):
