@@ -143,7 +143,11 @@ def burn_formats(g, side, dv_eci_mps):
 def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
     g = game_from_state(st)
     side = st["role"]
-    brains = brains or DEFAULT_BRAINS[side]
+    if not brains:
+        brains = list(DEFAULT_BRAINS[side])
+        deployed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{side}.zip")
+        if os.path.exists(deployed):              # tools/promote_model.py 部署的 RL 策略自動加入
+            brains.append("sb3:" + deployed)
     opp_models = opp_models or DEFAULT_OPP_MODELS[side]
     out = {"situation": situation(g), "advice": []}
     if g.done:
