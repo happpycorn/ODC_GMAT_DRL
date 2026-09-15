@@ -151,7 +151,16 @@
 | rollout 追者 | 追者燃料 2× | 88% | 88% | 0 |
 
 - **重播診斷**（4 局）：反制躲者的機動**類型**跟一般 rollout 躲者一模一樣（徑向+沿軌道 1061/1061 m/s 高能量逃逸），差別只在**時機**——第二發緊接著推（一般躲者隔 3000–3600 s）。兩三回合內遠地點就拉到追不到的高度，rollout 追者判斷所有候選都輸、乾脆不追（贏的反制局追者只用了 ~400 m/s）。
-- **結論**：rollout 追者的弱點不是「被讀心」，而是**對手模型集缺了「開局連續逃逸」這種躲者**（原本只有 coast / dv_evader_fast）；只在燃料對稱時致命，追者燃料 2× 時完全不可被針對。→ 新增 `EscapeEvader` 當對手模型，驗證中（`reports/hap108_robust_pursuer.md`）。
+- **初步解讀**：對手模型集缺了「開局連續逃逸」這種躲者 → 新增 `EscapeEvader`。
+- **驗證**（對稱規則、16 局，`reports/hap108_robust_pursuer.md`）：
+
+| 追者 | vs rollout 躲者 | vs EscapeEvader | vs 反制者 |
+|---|---|---|---|
+| rollout 追者 | 56% | **19%** | 12% |
+| rollout 追者 + EscapeEvader 對手模型 | 56% | 19% | 19% |
+
+- **修正後的結論**：加對手模型**沒用**，因為**單純的 EscapeEvader 本身就把 rollout 追者壓到 19%**——這不是「被讀心」，而是**燃料對稱時「開局立刻逃逸」近乎躲者的支配策略**，追者的候選集（任何 Lambert 解）都追不上（呼應 E8：燃料比主導勝負）。追者燃料 2× 時同一招就無效（E12 表中 88% / 88%）。
+- **反過來的收穫**：我們自己的 rollout 躲者（候選 = DvEvader 系）**沒有**立刻逃逸，所以不是最強的躲者 → 把 EscapeEvader 加進 rollout 躲者的候選集驗證中（`reports/hap108_escape_evader_*.md`）。
 
 ## E10 用 rollout 大腦確認平衡結論
 - **產物**：`reports/rollout_rules_{symmetric,pursuer_fuel_2x,evader_small_burn_big_fuel}.md`（24 局，mixed 幾何）
