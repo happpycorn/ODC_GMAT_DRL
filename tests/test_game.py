@@ -117,6 +117,7 @@ def test_rule_sampling_and_scenarios_valid():
             Game.from_elements(Rules(), sc.orbit_pursuer, sc.orbit_evader)
     with pytest.raises(KeyError):
         Rules.from_dict({"window": 3})
+    assert Rules.from_dict({"_comment": "註解欄位忽略", "window_sec": 200.0}).window_sec == 200.0
 
 
 # ------------------------------------------------------------------ 觀測

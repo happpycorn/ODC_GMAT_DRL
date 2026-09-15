@@ -55,6 +55,7 @@ class Rules:
         if isinstance(d, Rules):
             return d
         names = {f.name for f in fields(cls)}
+        d = {k: v for k, v in d.items() if not k.startswith("_")}   # "_comment" 之類的註解欄位
         unknown = set(d) - names
         if unknown:
             raise KeyError(f"未知的規則欄位：{sorted(unknown)}（可用：{sorted(names)}）")
