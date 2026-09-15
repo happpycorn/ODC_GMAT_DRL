@@ -211,6 +211,18 @@ def main(argv=None):
     p = sub.add_parser("init", help="產生局勢檔範本")
     p.add_argument("path")
 
+    p = sub.add_parser("import", help="讀 GMAT ReportFile 更新局勢檔（免手抄）")
+    p.add_argument("path", help="局勢檔（會被更新）")
+    p.add_argument("report", help="GMAT ReportFile")
+    p.add_argument("--pursuer-ship", required=True, help="報表裡追者的 Spacecraft 名稱")
+    p.add_argument("--evader-ship", required=True, help="報表裡躲者的 Spacecraft 名稱")
+    p.add_argument("--row", type=int, default=-1, help="取第幾列（預設最後一列）")
+    p.add_argument("--columns", default=None, help="報表沒有表頭時的欄名（空白分隔）")
+    p.add_argument("--t-offset", type=float, default=0.0, help="報表 ElapsedSecs 與比賽時間的差")
+    p.add_argument("--mover", default=None, help="現在輪到誰（pursuer/evader）")
+    p.add_argument("--fuel-used", nargs=2, type=float, default=None, metavar=("P", "E"),
+                   help="雙方已用燃料 m/s")
+
     p = sub.add_parser("advise", help="讀局勢檔，給建議")
     p.add_argument("path")
     p.add_argument("--brains", default=None, help="逗號分隔 agent 規格（可含 sb3:path）")
@@ -236,6 +248,23 @@ def main(argv=None):
         with open(args.path, "w") as f:
             json.dump(template_state(), f, indent=2, ensure_ascii=False)
         print(f"→ {args.path}")
+        return 0
+
+    if args.cmd == "import":
+        from game.state_io import apply_report_to_state, read_gmat_report
+        with open(args.path) as f:
+            st = json.load(f)
+        rec = read_gmat_report(args.report, args.columns.split() if args.columns else None, args.row)
+        st = apply_report_to_state(st, rec, args.pursuer_ship, args.evader_ship, args.t_offset)
+        if args.mover:
+            st["mover"] = args.mover
+        if args.fuel_used:
+            st["fuel_used_mps"] = {"pursuer": args.fuel_used[0], "evader": args.fuel_used[1]}
+        game_from_state(st)                       # 建得起來才寫回（再做一次整體檢查）
+        with open(args.path, "w") as f:
+            json.dump(st, f, indent=2, ensure_ascii=False)
+        g = game_from_state(st)
+        print(f"→ {args.path} 已更新：t={g.t:.1f}s  距離 {g.distance():.3f} km  輪到 {g.mover}")
         return 0
 
     if args.cmd == "advise":
