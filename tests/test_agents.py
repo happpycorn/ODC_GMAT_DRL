@@ -101,6 +101,7 @@ def test_adaptive_evader_picks_by_fuel_ratio():
     a = AdaptiveEvader()
     assert isinstance(a.choose(Rules()), EscapeEvader)                                  # 對稱 → 逃逸
     assert isinstance(a.choose(Rules(fuel_pursuer_mps=6000.0)), RolloutPlanner)         # 追者 2× → rollout
+    assert isinstance(a.choose(Rules(max_dv_evader_mps=500.0)), RolloutPlanner)         # 躲者單發小 → rollout
     g = Game.from_elements(Rules(first_mover="evader", t_max_sec=3000.0), NEAR_P, NEAR_E)
     a.reset()
     dv = a.act(g, "evader")
