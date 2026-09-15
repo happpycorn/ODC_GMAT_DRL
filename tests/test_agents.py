@@ -78,6 +78,22 @@ def test_rollout_parallel_matches_serial():
         assert np.allclose(dv_s, dv_p) and np.allclose(sc_s, sc_p)
 
 
+def test_escape_evader_burns_twice_then_hands_over():
+    rules = Rules(first_mover="evader", t_max_sec=4000.0)
+    g = Game.from_elements(rules, NEAR_P, NEAR_E)
+    E = make_agent("escape_evader")
+    E.reset()
+    mags = []
+    while not g.done:
+        if g.mover == "evader":
+            rec = g.play_turn(E.act(g, "evader"))
+            mags.append(rec["dv_mps"])
+        else:
+            g.play_turn(np.zeros(3))
+    assert mags[0] > 1000.0 and mags[1] > 1000.0          # 開局兩發推滿（或為了存活減半）
+    assert g.outcome != "crash_evader"
+
+
 def test_tournament_runs_and_reports():
     games = make_games(2, "default", "near_coplanar", seed=1)
     res = run_tournament(["lambert_pursuer"], ["coast", "random"], games, workers=1, progress=False)

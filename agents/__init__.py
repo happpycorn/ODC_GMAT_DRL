@@ -5,7 +5,7 @@
     make_agent("sb3:runs/xxx/pursuer_final.zip")      # 訓練好的 RL 策略（見 agents/rl.py）
 """
 from agents.base import Agent, CallableAgent, CoastAgent, PoolAgent, RandomAgent
-from agents.analytic import DvEvader, LambertPursuer
+from agents.analytic import DvEvader, EscapeEvader, LambertPursuer
 from agents.search import MinimaxEvader, MinimaxPursuer
 
 REGISTRY = {
@@ -17,6 +17,7 @@ REGISTRY = {
     "lambert_pursuer_fast": lambda **kw: LambertPursuer(**{"max_revs": 1, "pts_per_period": 12,
                                                           "j2_shoot": False, **kw}),
     "dv_evader": DvEvader,
+    "escape_evader": EscapeEvader,
     "dv_evader_fast": lambda **kw: DvEvader(directions="axes", mags=(1.0,), **kw),
     "minimax_pursuer": MinimaxPursuer,
     "minimax_evader": MinimaxEvader,

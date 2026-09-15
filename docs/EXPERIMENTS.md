@@ -139,6 +139,20 @@
 - **結論**：RL 不論當候選或對手模型都**沒有統計上可見的增益**，還讓決策變慢 1.2–2.3 倍；單獨使用在對稱規則下是最弱的大腦。**當天主腦 = 純 rollout 規劃器**；RL 模型保留為 copilot 的參考意見與極快速（4 ms）的訓練/推演對手。
 - **細節觀察**：rollout 追者把 RL 躲者當對手模型時，對 RL 躲者勝率升到 71%（對手模型對上真實對手時確實有用），但對其他躲者掉——**「猜中對手」有利、「猜錯」有害**，這正是 exploitability 測試（E12）要量的東西。
 
+## E12 Exploitability（HAP-108）
+- **方法**：`tools/exploitability.py`。反制者 = 對面角色的 RolloutPlanner，對手模型設成我方大腦（rollout 大腦用輕量版近似）；exploitability = 我方對一般強對手的勝率 − 對反制者的勝率。16 局、mixed 幾何。
+
+| 我方大腦 | 規則 | vs 一般強對手 | vs 反制者 | exploitability |
+|---|---|---|---|---|
+| **rollout 追者** | 對稱 | 56% | **12%** | **+44** 🔴 |
+| rollout 躲者 | 對稱 | 44% | 50% | −6 |
+| Lambert 追者 | 對稱 | 0% | 0% | 地板效應 |
+| Lambert 追者 | 追者燃料 2× | 50% | 56% | −6 |
+| rollout 追者 | 追者燃料 2× | 88% | 88% | 0 |
+
+- **重播診斷**（4 局）：反制躲者的機動**類型**跟一般 rollout 躲者一模一樣（徑向+沿軌道 1061/1061 m/s 高能量逃逸），差別只在**時機**——第二發緊接著推（一般躲者隔 3000–3600 s）。兩三回合內遠地點就拉到追不到的高度，rollout 追者判斷所有候選都輸、乾脆不追（贏的反制局追者只用了 ~400 m/s）。
+- **結論**：rollout 追者的弱點不是「被讀心」，而是**對手模型集缺了「開局連續逃逸」這種躲者**（原本只有 coast / dv_evader_fast）；只在燃料對稱時致命，追者燃料 2× 時完全不可被針對。→ 新增 `EscapeEvader` 當對手模型，驗證中（`reports/hap108_robust_pursuer.md`）。
+
 ## E10 用 rollout 大腦確認平衡結論
 - **產物**：`reports/rollout_rules_{symmetric,pursuer_fuel_2x,evader_small_burn_big_fuel}.md`（24 局，mixed 幾何）
 

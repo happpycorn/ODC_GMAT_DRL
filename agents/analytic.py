@@ -204,6 +204,45 @@ def _direction_set(kind):
     return [d / np.linalg.norm(d) for d in dirs]
 
 
+class EscapeEvader(Agent):
+    """開局高能量逃逸：前 `n_escape` 個躲者回合沿 (徑向+沿軌道) 推滿，之後交給 DvEvader。
+
+    來源（HAP-108 exploitability 重播）：針對 rollout 追者的反制躲者，機動類型跟一般躲者一樣
+    （1061/1061 m/s 徑向+沿軌道），差別只在**第二發緊接著推**——兩三個回合內就把遠地點拉到
+    追者追不到的高度，rollout 追者判斷所有候選都輸、乾脆不追。把它做成顯式對手模型，
+    追者的 rollout 才會把「開局就逃」納入最壞情況。
+    """
+    name = "escape_evader"
+
+    def __init__(self, n_escape=2, direction=(1.0, 1.0, 0.0), then="dv_evader_fast"):
+        d = np.asarray(direction, dtype=float)
+        self.dir = d / np.linalg.norm(d)
+        self.n_escape = n_escape
+        self.then_spec = then
+        self._then = None
+        self._done = 0
+
+    def reset(self, seed=None):
+        self._done = 0
+        if self._then is not None:
+            self._then.reset(seed)
+
+    def act(self, game, side):
+        assert side == "evader"
+        if self._done < self.n_escape and game.burn_cap(side) > 0:
+            dv = rsw_to_eci_dv(game, side, self.dir * game.burn_cap(side))
+            for _ in range(6):
+                if orbit_survives(game, side, dv):
+                    self._done += 1
+                    return dv
+                dv = dv * 0.5
+            self._done = self.n_escape
+        if self._then is None:
+            from agents import make_agent
+            self._then = make_agent(self.then_spec)
+        return self._then.act(game, side)
+
+
 class DvEvader(Agent):
     name = "dv_evader"
 
