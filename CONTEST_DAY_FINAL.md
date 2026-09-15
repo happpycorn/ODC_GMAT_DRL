@@ -30,7 +30,7 @@
 | 8 | 撞地/低於多少高度算輸？ | `crash_altitude_km` |
 | 9 | 指令怎麼輸入？座標系（EarthMJ2000Eq / VNB / LVLH）？單位（km/s？） | copilot 輸出 ECI km/s、VNB km/s、RSW m/s 三種，照官方選 |
 | 10 | 狀態怎麼給？（六根數 / 笛卡兒 / GMAT 報表）看得到對手的燃料嗎？ | 局勢檔 `elements` 或 `r_km/v_kms`；對手燃料看不到就填估計值 |
-| 11 | 每回合下指令有沒有時間限制？ | 決定能不能跑 rollout（`--no-rollout` 約 1 s，完整約 5–20 s） |
+| 11 | 每回合下指令有沒有時間限制？ | 決定能不能跑推演。實測（16 執行緒桌機，含程式啟動 ~4 s）：躲者完整 advise **~25 s**（4 個大腦 × 4 個對手模型，含 rollout 追者）、`--no-rollout` **~5 s**；時間很趕就 `--no-rollout` 或 `--opponents` 只留 1–2 個 |
 | 12 | 計分細節（只看勝負？還是距離/燃料/時間也算分？） | 影響燃料權重；copilot 的 rollout 會列燃料與時間 |
 
 ---
@@ -64,7 +64,8 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
    - `純滑行最近接近`：< 捕獲半徑 → 追者**不用推**（省油），躲者**必須推**。
    - `追者攔截所需 Δv（短程）` vs `追者剩餘燃料/單發上限`：need < 單發上限 → 追者這回合可能直接收掉。
    - `近地點高度` / `不推也安全`：任何一方 False → 那方不處理就會再入。
-4. **選建議**：預設採用推演結果「對最強對手模型仍 WIN」的那個大腦；都 LOSE 就選最近距離最小（追者）/最大（躲者）的。
+4. **選建議**：預設採用推演結果「對最強對手模型（追者看 `dv_evader`/`escape_evader`、躲者看 `rollout_pursuer`）仍 WIN」的那個大腦；都 LOSE 就選最近距離最小（追者）/最大（躲者）的。
+   ⚠️ 預設大腦（rollout）自己內部用的對手模型較弱，**它的第一建議不一定是推演表上最好的**——實測預設幾何下 rollout 躲者建議不動、推演對 rollout 追者 LOSE，而 `escape_evader` 推演 WIN。以推演表為準，不要只看第一個大腦。
 5. **先驗證再下**（時間允許）：
    ```bash
    uv run python copilot.py advise state.json --no-rollout --gmat burn.script --verify
