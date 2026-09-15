@@ -1,47 +1,36 @@
-"""決賽核心環境：回合交替的追逃微分賽局（HAP-53）。
+"""決賽核心環境：回合交替的軌道追逃賽局（gym 包裝，HAP-53 → HAP-101 重寫）。
 
-理論背景與設計理由見 METHODOLOGY.md。重點：
+遊戲規則與物理全在 `game/`（純遊戲核心，可單獨拿去做搜尋/評測/當天 copilot），這裡只負責
+把它包成 stable-baselines3 吃得下的**單 agent** 環境：
 
-* **回合交替**：一段時間一方動作、下一段時間換另一方，交替（官方口頭情報）。這裡把
-  「一個回合 = 我方下一發脈衝並滑行一個窗口，接著對手下一發脈衝並滑行一個窗口」當成
-  一次 `env.step()`。
-* **單 agent + 可插拔對手**：本環境對 stable-baselines3 呈現成標準單 agent 環境——
-  對手那一半由 `opponent_policy(obs) -> action` 在 env 內部推進。這讓它 (1) 直接吃
-  sb3 SAC、(2) curriculum 可把對手設成 coast / 解析基準、(3) self-play 時把對手換成
-  凍結的自己（HAP-54）。用 `set_opponent()` 或 config 指定。
-* **角色**：`role="pursuer"`（預設）或 `"evader"`，決定學習中的 agent 控制哪一方。
-* **勝負**（官方）：追者在時間+燃料限制內把相對距離壓進捕獲半徑 → 追者勝；躲者撐到
-  時間上限沒被追上 → 躲者勝。
-
-⚠️ 所有規則數字（窗口長度、Δv/燃料/時間上限、捕獲半徑、雙方初始軌道、計分公式）
-都還沒官方公告（Linear HAP-50），以下皆為**佔位參數**，集中在 DEFAULT_* / config，
-公告一到只改數字，不動結構。
+* `role`：學習中的 agent 控制哪一方（"pursuer" / "evader" / "random" 每局隨機）。
+* `opponent`：另一方由 agent 物件在 env 內部推進（字串 / dict / Agent / callable，見
+  agents.make_agent）。也可以給 {"pursuer": spec, "evader": spec} 依對手角色選。
+  self-play 時用 `set_opponent()` 換成凍結的自己（HAP-54）。
+* 一次 `step()` = 我方下一發 + 滑行一個窗口，接著對手所有回合推進到再次輪到我方。
+* action ∈ [-1,1]^3 是**自己 RSW(LVLH) 座標**的 Δv 方向；大小 = 單次上限 × min(|a|,1)^p，
+  所以永遠不會超過單次上限（剩餘燃料不足時 Game 會再裁）。
+* 規則可固定（`rules`）或每局從 `rule_ranges` 抽；初始幾何從 `scenario` 家族抽。
+* 獎勵（agent 視角，近似零和）：
+    終局 ±win（勝/負） + 勢能型塑形 w·(γΦ(s')−Φ(s)) − fuel·(本步 Δv / 預算)
+    Φ = ∓ψ，ψ = log((追擊所需 Δv + 1)/(追者剩餘燃料 + 1))——追者要壓低、躲者要拉高。
+    勢能型塑形理論上不改變最優策略（Ng et al. 1999）。
+* 比賽結束（捕獲/超時/撞地）一律 `terminated=True`：超時是賽局真正的終點（剩餘時間在
+  觀測裡），標成 truncated 會讓價值函數越過終點 bootstrap。
 """
-import numpy as np
+import math
+
 import gymnasium as gym
+import numpy as np
 from gymnasium import spaces
 
-from physics import propagate, get_r0_v0, orbital_period, EARTH_MU, RE_VAL
-from envs.baselines import BASELINES, coast_policy
-
-# ---- 佔位參數（HAP-50 公告後覆寫）----
-DEFAULT_WINDOW_SEC = 300.0           # 一個控制窗口（滑行）長度
-DEFAULT_MAX_DV_MPS = 1500.0          # 單次機動 Δv 上限
-DEFAULT_FUEL_BUDGET_MPS = 3000.0     # 每方總 Δv 預算
-DEFAULT_CAPTURE_RADIUS_KM = 5.0      # 捕獲判定半徑
-DEFAULT_TMAX_PERIOD_MULT = 4.0       # 時間上限 = 追者軌道週期的幾倍
-DEFAULT_GRAVITY_DEGREE = 2
-ZEM_HORIZON_CAP_MULT = 2.0           # ZEM 外推最長取幾倍追者週期（限制成本）
-
-# 佔位初始軌道（六根數：SMA km, ECC, INC/RAAN/AOP/TA 度）——追者在後、躲者在前
-DEFAULT_ORBIT_PURSUER = {"sma": 7000.0, "ecc": 0.0, "inc": 0.0, "raan": 0.0, "aop": 0.0, "ta": 0.0}
-DEFAULT_ORBIT_EVADER = {"sma": 7100.0, "ecc": 0.01, "inc": 0.5, "raan": 0.0, "aop": 0.0, "ta": 8.0}
-
-# 獎勵權重（佔位）
-W_SHAPE = 0.1          # 距離塑形（燃料成本塑形待 HAP-54 調參再加）
-CAPTURE_BONUS = 500.0  # 追者捕獲 / 躲者被捕的終局值（零和）
-TIMEOUT_VALUE = 500.0  # 躲者存活 / 追者超時的終局值（零和）
-CRASH_PENALTY = 500.0  # 自己撞地球的懲罰
+from agents import make_agent
+from agents.analytic import need_horizon, pursuer_need
+from game.core import Game
+from game.obs import OBS_DIM, build_obs
+from game.rules import SIDES, RuleRanges, Rules, other
+from game.scenarios import sample_scenario
+from physics.frames import rsw_basis
 
 
 class GmatFinalEnv(gym.Env):
@@ -49,199 +38,137 @@ class GmatFinalEnv(gym.Env):
 
     def __init__(self, config=None):
         super().__init__()
-        self.config = config or {}
+        cfg = dict(config or {})
+        self.config = cfg
+        self.role_cfg = cfg.get("role", "pursuer")
+        assert self.role_cfg in ("pursuer", "evader", "random")
+        self.base_rules = Rules.from_dict(cfg.get("rules", {}))
+        rr = cfg.get("rule_ranges")
+        self.rule_ranges = None if not rr else (RuleRanges() if rr is True else RuleRanges(**rr))
+        self.scenario = cfg.get("scenario", "default")
+        self.set_opponent(cfg.get("opponent", "coast"))
+        self.action_power = float(cfg.get("action_power", 1.0))
+        self.use_intercept_obs = bool(cfg.get("use_intercept_obs", True))
+        rew = cfg.get("reward", {})
+        self.r_win = float(rew.get("win", 10.0))
+        self.r_shape = float(rew.get("shape", 1.0))
+        self.r_fuel = float(rew.get("fuel", 0.0))
+        self.gamma = float(rew.get("gamma", 0.99))
+        self.need_windows = float(cfg.get("need_horizon_windows", 4.0))
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
-        # obs：r_rel(3)+v_rel(3)+own_fuel(1)+opp_fuel(1)+t_remain(1)+zem(3) = 12
-        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(12,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=-np.inf, high=np.inf, shape=(OBS_DIM,), dtype=np.float32)
+        self.game = None
+        self.role = "pursuer" if self.role_cfg == "random" else self.role_cfg
+        self._need = (math.inf, 0.0)
 
-        self.role = self.config.get("role", "pursuer")
-        assert self.role in ("pursuer", "evader"), "role 必須是 'pursuer' 或 'evader'"
+    # ------------------------------------------------------------------ 對手
+    def set_opponent(self, spec):
+        """換對手。spec 可為 agent 規格，或 {"pursuer": spec, "evader": spec}（依對手扮演的角色）。"""
+        if isinstance(spec, dict) and set(spec) <= set(SIDES) and spec:
+            self.opponents = {s: make_agent(spec[s]) for s in spec}
+        else:
+            a = make_agent(spec)
+            self.opponents = {s: a for s in SIDES}
 
-        self.mu = float(self.config.get("mu", EARTH_MU))
-        self.gravity_degree = int(self.config.get("gravity_degree", DEFAULT_GRAVITY_DEGREE))
-        self.window_sec = float(self.config.get("window_sec", DEFAULT_WINDOW_SEC))
-        self.max_dv = float(self.config.get("max_dv_mps", DEFAULT_MAX_DV_MPS))
-        self.fuel_budget = float(self.config.get("fuel_budget_mps", DEFAULT_FUEL_BUDGET_MPS))
-        self.capture_radius = float(self.config.get("capture_radius_km", DEFAULT_CAPTURE_RADIUS_KM))
-        self.orbit_p = dict(self.config.get("orbit_pursuer", DEFAULT_ORBIT_PURSUER))
-        self.orbit_e = dict(self.config.get("orbit_evader", DEFAULT_ORBIT_EVADER))
+    def _opponent(self):
+        return self.opponents[other(self.role)]
 
-        self.T_p = orbital_period(self.orbit_p["sma"], self.mu)
-        tmax_mult = float(self.config.get("t_max_period_multiple", DEFAULT_TMAX_PERIOD_MULT))
-        t_max = self.config.get("t_max_sec", None)
-        self.t_max = float(t_max) if t_max is not None else tmax_mult * self.T_p
-        self.zem_horizon_cap = ZEM_HORIZON_CAP_MULT * self.T_p
-
-        # 對手策略：config 可給字串（查 BASELINES）或 callable；預設 coast
-        opp = self.config.get("opponent_policy", "coast")
-        self.opponent_policy = BASELINES.get(opp, coast_policy) if isinstance(opp, str) else opp
-
-        self._init_state()
-
-    # ------------------------------------------------------------------ #
-    def set_opponent(self, policy):
-        """換對手（curriculum / self-play 用）。接受字串或 callable(obs)->action。"""
-        self.opponent_policy = BASELINES.get(policy, coast_policy) if isinstance(policy, str) else policy
-
-    def _init_state(self):
-        self.rp = self.vp = self.re = self.ve = None
-        self.used_p = 0.0
-        self.used_e = 0.0
-        self.viol_p = 0
-        self.viol_e = 0
-        self.elapsed = 0.0
-        self.outcome = None            # None / "capture" / "timeout" / "crash_pursuer" / "crash_evader"
-        self.crashed_side = None
-
-    # ------------------------------------------------------------------ #
+    # ------------------------------------------------------------------ 核心
     def reset(self, seed=None, options=None):
         super().reset(seed=seed)
-        self.rp, self.vp = get_r0_v0(**self.orbit_p, mu=self.mu)
-        self.re, self.ve = get_r0_v0(**self.orbit_e, mu=self.mu)
-        self.used_p = self.used_e = 0.0
-        self.viol_p = self.viol_e = 0
-        self.elapsed = 0.0
-        self.outcome = None
-        self.crashed_side = None
-        return self._obs_for(self.role), {}
+        options = options or {}
+        rng = self.np_random
+        for _ in range(20):
+            if "rules" in options:
+                rules = Rules.from_dict(options["rules"])
+            elif self.rule_ranges is not None:
+                rules = self.rule_ranges.sample(rng, self.base_rules)
+            else:
+                rules = self.base_rules
+            if "orbit_pursuer" in options:
+                orb_p, orb_e = options["orbit_pursuer"], options["orbit_evader"]
+            else:
+                sc = sample_scenario(rng, options.get("scenario", self.scenario))
+                orb_p, orb_e = sc.orbit_pursuer, sc.orbit_evader
+            role = options.get("role", self.role_cfg)
+            if role == "random":
+                role = "pursuer" if rng.random() < 0.5 else "evader"
+            self.role = role
+            self.game = Game.from_elements(rules, orb_p, orb_e)
+            opp = self._opponent()
+            opp.reset(seed=int(rng.integers(2 ** 31)))
+            self._advance_opponent()
+            if not self.game.done:
+                break
+        self._refresh_need()
+        self._phi = self._potential()
+        return self._obs(), self._info(0.0)
 
     def step(self, action):
-        action = np.asarray(action, dtype=np.float64).reshape(3)
-        opp_role = "evader" if self.role == "pursuer" else "pursuer"
+        g = self.game
+        assert g is not None and not g.done, "episode 已結束，請先 reset()"
+        assert g.mover == self.role
+        dv = self._action_to_dv(action)
+        rec = g.play_turn(dv)
+        self._advance_opponent()
+        self._refresh_need()
 
-        dist_before = self._distance()
+        reward = 0.0
+        phi_new = self._potential()
+        reward += self.gamma * phi_new - self._phi
+        self._phi = phi_new
+        reward -= self.r_fuel * rec["dv_mps"] / max(g.rules.fuel(self.role), 1e-9)
+        if g.done:
+            reward += self.r_win if g.winner == self.role else -self.r_win
+        return self._obs(), float(reward), bool(g.done), False, self._info(rec["dv_mps"])
 
-        # 一個回合 = 我方一發 + 滑行；接著對手一發 + 滑行（交替）
-        self._apply_impulse(self.role, action)
-        self._coast(self.window_sec)
+    # ------------------------------------------------------------------ 輔助
+    def _advance_opponent(self):
+        g = self.game
+        opp = self._opponent()
+        while not g.done and g.mover != self.role:
+            g.play_turn(opp.act(g, g.mover))
 
-        if self._check_terminal() is None:
-            opp_action = np.asarray(self.opponent_policy(self._obs_for(opp_role)),
-                                    dtype=np.float64).reshape(3)
-            self._apply_impulse(opp_role, opp_action)
-            self._coast(self.window_sec)
-            self._check_terminal()
+    def _action_to_dv(self, action):
+        a = np.asarray(action, dtype=np.float64).reshape(3)
+        a = np.nan_to_num(a, nan=0.0)
+        n = float(np.linalg.norm(a))
+        if n < 1e-6:
+            return np.zeros(3)
+        mag = self.game.rules.max_dv(self.role) * min(n, 1.0) ** self.action_power
+        dv_rsw = a / n * mag
+        return rsw_basis(self.game.r(self.role), self.game.v(self.role)).T @ dv_rsw
 
-        obs = self._obs_for(self.role)
-        terminated = self.outcome in ("capture", "crash_pursuer", "crash_evader")
-        truncated = self.outcome == "timeout"
-        reward = self._reward(dist_before)
-
-        info = {
-            "distance_km": self._distance(),
-            "outcome": self.outcome,
-            "used_dv_pursuer": self.used_p,
-            "used_dv_evader": self.used_e,
-            "elapsed_sec": self.elapsed,
-            "agent_won": self._agent_won(),
-        }
-        return obs, float(reward), bool(terminated), bool(truncated), info
-
-    # ------------------------------------------------------------------ #
-    def _own_opp(self, perspective):
-        if perspective == "pursuer":
-            return (self.rp, self.vp, self.used_p), (self.re, self.ve, self.used_e)
-        return (self.re, self.ve, self.used_e), (self.rp, self.vp, self.used_p)
-
-    def _apply_impulse(self, side, action):
-        """action ∈ [-1,1]^3 → ECI Δv 向量 (m/s)，脈衝加到該方速度；燃料不足則夾成 0。"""
-        remaining = self.fuel_budget - (self.used_p if side == "pursuer" else self.used_e)
-        dv_mps = action * self.max_dv
-        mag = float(np.linalg.norm(dv_mps))
-        if remaining <= 0.0:
-            return 0.0                      # 沒油了，動不了
-        if mag > remaining:                 # 只剩一點油：等比例縮到剩餘量
-            dv_mps = dv_mps * (remaining / mag)
-            mag = remaining
-        if side == "pursuer":
-            self.vp = self.vp + dv_mps / 1000.0
-            self.used_p += mag
-            if mag > self.max_dv:
-                self.viol_p += 1
+    def _refresh_need(self):
+        g = self.game
+        if g.done or not (self.use_intercept_obs or self.r_shape != 0.0):
+            self._need = (math.inf, 0.0)
         else:
-            self.ve = self.ve + dv_mps / 1000.0
-            self.used_e += mag
-            if mag > self.max_dv:
-                self.viol_e += 1
-        return mag
+            self._need = pursuer_need(g, horizon=need_horizon(g, self.need_windows))
 
-    def _coast(self, dt):
-        self.rp, self.vp = propagate(self.mu, self.rp, self.vp, dt, self.gravity_degree)
-        self.re, self.ve = propagate(self.mu, self.re, self.ve, dt, self.gravity_degree)
-        self.elapsed += dt
-        if not (np.all(np.isfinite(self.rp)) and np.all(np.isfinite(self.re))):
-            self.crashed_side = "pursuer" if not np.all(np.isfinite(self.rp)) else "evader"
-        elif np.linalg.norm(self.rp) < RE_VAL:
-            self.crashed_side = "pursuer"
-        elif np.linalg.norm(self.re) < RE_VAL:
-            self.crashed_side = "evader"
+    def _potential(self):
+        g = self.game
+        if g.done or self.r_shape == 0.0:
+            return 0.0
+        need = self._need[0]
+        psi = 5.0 if not math.isfinite(need) else float(
+            np.clip(math.log((need + 1.0) / (g.fuel_left("pursuer") + 1.0)), -5.0, 5.0))
+        sign = -1.0 if self.role == "pursuer" else 1.0
+        return self.r_shape * sign * psi
 
-    def _distance(self):
-        return float(np.linalg.norm(self.rp - self.re))
+    def _obs(self):
+        return build_obs(self.game, self.role, use_intercept=self.use_intercept_obs, need_cache=self._need)
 
-    def _check_terminal(self):
-        """設定並回傳 self.outcome（None 表示尚未結束）。優先序：撞地 > 捕獲 > 超時。"""
-        if self.crashed_side is not None:
-            self.outcome = f"crash_{self.crashed_side}"
-        elif self._distance() <= self.capture_radius:
-            self.outcome = "capture"
-        elif self.elapsed >= self.t_max:
-            self.outcome = "timeout"
-        return self.outcome
-
-    def _zem(self, perspective):
-        """自由漂移外推的預測相對位置向量 (km)：把雙方從當前狀態往前滑行 horizon 秒。"""
-        horizon = min(self.t_max - self.elapsed, self.zem_horizon_cap)
-        if horizon <= 0.0:
-            (ro, _, _), (rp, _, _) = self._own_opp(perspective)
-            return rp - ro
-        rp_p, _ = propagate(self.mu, self.rp, self.vp, horizon, self.gravity_degree)
-        re_p, _ = propagate(self.mu, self.re, self.ve, horizon, self.gravity_degree)
-        if perspective == "pursuer":
-            return re_p - rp_p
-        return rp_p - re_p
-
-    def _obs_for(self, perspective):
-        (r_own, v_own, used_own), (r_opp, v_opp, used_opp) = self._own_opp(perspective)
-        r_rel = r_opp - r_own
-        v_rel = v_opp - v_own
-        own_fuel = max(0.0, 1.0 - used_own / self.fuel_budget)
-        opp_fuel = max(0.0, 1.0 - used_opp / self.fuel_budget)
-        t_remain = max(0.0, 1.0 - self.elapsed / self.t_max)
-        zem = self._zem(perspective)
-        obs = np.concatenate([r_rel, v_rel, [own_fuel, opp_fuel, t_remain], zem]).astype(np.float64)
-        obs = np.nan_to_num(obs, nan=0.0, posinf=1e12, neginf=-1e12)
-        return obs.astype(np.float32)
-
-    def _agent_won(self):
-        if self.outcome is None:
-            return None
-        if self.role == "pursuer":
-            return self.outcome == "capture"
-        return self.outcome == "timeout"          # 躲者：存活到時間上限即勝
-
-    def _reward(self, dist_before):
-        """從 agent（self.role）視角的近似零和獎勵：距離塑形 + 燃料成本 + 終局值。
-
-        佔位版（HAP-50 公告計分後再對齊）：追者要縮短距離、躲者要拉開/存活。
-        """
-        dist_after = self._distance()
-        closing = dist_before - dist_after        # >0 表示距離縮短
-
-        if self.role == "pursuer":
-            r = W_SHAPE * closing
-        else:
-            r = W_SHAPE * (-closing)               # 躲者：距離拉開才是好事
-
-        # 終局值（零和）
-        if self.outcome == "capture":
-            r += CAPTURE_BONUS if self.role == "pursuer" else -CAPTURE_BONUS
-        elif self.outcome == "timeout":
-            r += TIMEOUT_VALUE if self.role == "evader" else -TIMEOUT_VALUE
-        elif self.outcome == f"crash_{self.role}":
-            r -= CRASH_PENALTY
-        elif self.outcome in ("crash_pursuer", "crash_evader"):
-            r += CAPTURE_BONUS                     # 對手自爆，等同我方獲勝
-
-        return r
+    def _info(self, dv_step):
+        g = self.game
+        info = g.summary()
+        info.update({
+            "role": self.role,
+            "distance_km": g.distance(),
+            "agent_won": None if not g.done else g.winner == self.role,
+            "dv_step_mps": dv_step,
+            "need_dv_mps": self._need[0],
+            "rules": g.rules.to_dict(),
+        })
+        return info

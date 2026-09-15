@@ -1,0 +1,95 @@
+"""決賽規則參數與規則分布。
+
+⚠️ 官方決賽規則（HAP-50）尚未公告。這裡的預設值是**佔位**：沿用初賽的量級（單次
+Δv 上限 1500 m/s、T_max = 4 × 追者週期、5 km 捕獲半徑）。因為數字未知，訓練時
+用 `RuleRanges` 隨機抽規則並把規則參數放進觀測（rule-conditioned policy），公告一到
+只要填 `Rules(...)` 就能直接評估 / 微調。
+"""
+from dataclasses import asdict, dataclass, fields, replace
+import math
+
+import numpy as np
+
+SIDES = ("pursuer", "evader")
+
+
+def other(side: str) -> str:
+    return "evader" if side == "pursuer" else "pursuer"
+
+
+@dataclass(frozen=True)
+class Rules:
+    window_sec: float = 300.0            # 一方下完脈衝後雙方滑行的時間（回合交替的一半）
+    max_dv_pursuer_mps: float = 1500.0   # 追者單次脈衝上限
+    max_dv_evader_mps: float = 1500.0    # 躲者單次脈衝上限
+    fuel_pursuer_mps: float = 3000.0     # 追者總 Δv 預算
+    fuel_evader_mps: float = 3000.0      # 躲者總 Δv 預算
+    capture_radius_km: float = 5.0       # 相對距離 <= 此值即捕獲（追者勝）
+    t_max_sec: float = 0.0               # > 0 直接指定；<= 0 用 t_max_periods × 追者初始週期
+    t_max_periods: float = 4.0
+    gravity_degree: int = 2              # 0=點質量, 2=J2, 3=J3, 4=J4（同 physics.propagate）
+    first_mover: str = "pursuer"         # 誰先下第一發
+    crash_altitude_km: float = 100.0     # 軌跡低於此高度 = 撞地/再入（佔位，同 Planner MIN_PERIAPSIS）
+    substep_sec: float = 60.0            # 窗口內事件偵測的分段長度（數值參數，不是規則）
+
+    def __post_init__(self):
+        if self.first_mover not in SIDES:
+            raise ValueError(f"first_mover 必須是 {SIDES}，收到 {self.first_mover!r}")
+        if self.window_sec <= 0:
+            raise ValueError("window_sec 必須 > 0")
+
+    def max_dv(self, side: str) -> float:
+        return self.max_dv_pursuer_mps if side == "pursuer" else self.max_dv_evader_mps
+
+    def fuel(self, side: str) -> float:
+        return self.fuel_pursuer_mps if side == "pursuer" else self.fuel_evader_mps
+
+    def to_dict(self) -> dict:
+        return asdict(self)
+
+    @classmethod
+    def from_dict(cls, d: dict) -> "Rules":
+        if isinstance(d, Rules):
+            return d
+        names = {f.name for f in fields(cls)}
+        unknown = set(d) - names
+        if unknown:
+            raise KeyError(f"未知的規則欄位：{sorted(unknown)}（可用：{sorted(names)}）")
+        return cls(**d)
+
+    def with_(self, **kw) -> "Rules":
+        return replace(self, **kw)
+
+
+def _loguniform(rng, lo, hi):
+    return float(math.exp(rng.uniform(math.log(lo), math.log(hi))))
+
+
+@dataclass(frozen=True)
+class RuleRanges:
+    """規則分布（官方公告前的訓練/評估用）。每個欄位是 (lo, hi)。"""
+    window_sec: tuple = (120.0, 900.0)          # log-uniform
+    max_dv_pursuer_mps: tuple = (50.0, 1500.0)  # log-uniform
+    evader_dv_ratio: tuple = (0.3, 1.0)         # 躲者單次上限 = 追者 × ratio
+    fuel_turns_pursuer: tuple = (2.0, 8.0)      # 追者總預算 = 單次上限 × turns
+    fuel_turns_evader: tuple = (2.0, 8.0)
+    capture_radius_km: tuple = (1.0, 20.0)      # log-uniform
+    t_max_periods: tuple = (1.5, 5.0)
+    p_pursuer_first: float = 0.5
+    gravity_degree: int = 2
+
+    def sample(self, rng: np.random.Generator, base: Rules = Rules()) -> Rules:
+        max_dv_p = _loguniform(rng, *self.max_dv_pursuer_mps)
+        max_dv_e = max_dv_p * rng.uniform(*self.evader_dv_ratio)
+        return base.with_(
+            window_sec=_loguniform(rng, *self.window_sec),
+            max_dv_pursuer_mps=max_dv_p,
+            max_dv_evader_mps=max_dv_e,
+            fuel_pursuer_mps=max_dv_p * rng.uniform(*self.fuel_turns_pursuer),
+            fuel_evader_mps=max_dv_e * rng.uniform(*self.fuel_turns_evader),
+            capture_radius_km=_loguniform(rng, *self.capture_radius_km),
+            t_max_sec=0.0,
+            t_max_periods=float(rng.uniform(*self.t_max_periods)),
+            gravity_degree=self.gravity_degree,
+            first_mover="pursuer" if rng.random() < self.p_pursuer_first else "evader",
+        )

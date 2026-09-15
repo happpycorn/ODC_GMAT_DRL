@@ -26,6 +26,11 @@
 | `scorer.py` | **逐字複製**，未改。 |
 | `propagator.py` | **改寫**：`propagate()` 的包裝與常數與 Planner 對齊，但 `get_r0_v0()`（六根數→Cartesian）改用自帶純 numpy 實作，拿掉 poliastro/astropy 相依。另加 `orbital_period()`。 |
 
+## 本 repo 原生（非 vendored）的物理模組
+`lambert.py`、`intercept.py`、`coast.py`、`frames.py` 是本 repo 為決賽寫的，不在 Planner 裡。
+`lambert.py` 用 `tools/compare_lambert_poliastro.py` 跟 Planner venv 的 poliastro izzo 比對過
+（1000 案例，雙方可解/不可解判定完全一致，速度差最大 1.4e-14 km/s）。
+
 ## 同步注意
 若 Planner 的 `core_math.py` / `scorer.py` 有實質更新，需手動同步這裡並更新上面的 commit。
 `get_r0_v0` 因為是改寫版，不要直接覆蓋；只在數值定義（mu 等）變動時對齊。

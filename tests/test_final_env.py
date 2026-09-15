@@ -1,84 +1,70 @@
-"""GmatFinalEnv 煙霧測試（HAP-53 驗收）。
-
-不需要 pytest，直接跑就會印結果：
-    uv run python tests/test_final_env.py
-守的是：check_env 合規（兩種角色）、回合交替、勝負分支（捕獲/超時/撞地）。
-"""
-import os
-import sys
+"""GmatFinalEnv（gym 包裝）測試：sb3 合規、回合語意、終局標記、獎勵方向、Δv 合法性。"""
 import numpy as np
-
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from envs.final_env import GmatFinalEnv
+import pytest
 from stable_baselines3.common.env_checker import check_env
 
-
-def test_check_env_both_roles():
-    for role in ("pursuer", "evader"):
-        check_env(GmatFinalEnv(config={"role": role}), warn=True)
-    print("[OK] check_env 兩種角色皆通過")
+from envs.final_env import GmatFinalEnv
 
 
-def test_capture_branch():
-    env = GmatFinalEnv(config={"role": "pursuer"})
+@pytest.mark.parametrize("role", ["pursuer", "evader", "random"])
+def test_check_env(role):
+    check_env(GmatFinalEnv({"role": role, "rule_ranges": True, "scenario": "mixed"}), warn=True)
+
+
+def test_timeout_is_terminated_not_truncated():
+    env = GmatFinalEnv({"role": "evader", "rules": {"t_max_sec": 1500.0, "window_sec": 300.0}})
     env.reset(seed=0)
-    env.re = env.rp + np.array([3.0, 0.0, 0.0])          # 相距 3km < 5km 捕獲半徑
-    assert env._check_terminal() == "capture"
-    assert env._agent_won() is True
-    print("[OK] 捕獲分支：追者判贏")
+    done = False
+    while not done:
+        obs, r, term, trunc, info = env.step(np.zeros(3))
+        assert not trunc
+        done = term
+    assert info["outcome"] == "timeout" and info["agent_won"] is True
+    assert r > 0
 
 
-def test_timeout_branch():
-    env_p = GmatFinalEnv(config={"role": "pursuer"}); env_p.reset(seed=0)
-    env_p.re = env_p.rp + np.array([1000.0, 0.0, 0.0]); env_p.elapsed = env_p.t_max + 1.0
-    assert env_p._check_terminal() == "timeout" and env_p._agent_won() is False
-
-    env_e = GmatFinalEnv(config={"role": "evader"}); env_e.reset(seed=0)
-    env_e.re = env_e.rp + np.array([1000.0, 0.0, 0.0]); env_e.elapsed = env_e.t_max + 1.0
-    env_e._check_terminal()
-    assert env_e._agent_won() is True
-    print("[OK] 超時分支：追者輸 / 躲者贏")
+def test_opponent_moves_first_when_rules_say_so():
+    env = GmatFinalEnv({"role": "pursuer", "opponent": "random",
+                        "rules": {"first_mover": "evader"}})
+    env.reset(seed=3)
+    assert env.game.turn == 1 and env.game.mover == "pursuer"
 
 
-def test_crash_branch():
-    env = GmatFinalEnv(config={"role": "pursuer"})
-    env.reset(seed=0)
-    env.rp = env.rp / np.linalg.norm(env.rp) * 6000.0     # 拉到地表以下（RE≈6378）
-    env._coast(1.0)
-    assert env._check_terminal() == "crash_pursuer"
-    print("[OK] 撞地分支")
-
-
-def test_alternation():
-    env = GmatFinalEnv(config={"role": "pursuer", "opponent_policy": "naive_evader"})
-    env.reset(seed=1)
-    used_e_before = env.used_e
-    env.step(np.zeros(3))                                  # 我方不動
-    assert env.used_e > used_e_before, "對手窗口沒被執行——交替失效"
-    print("[OK] 回合交替：對手窗口確實被執行")
-
-
-def test_random_episode_runs():
+def test_action_never_exceeds_cap_and_random_play_terminates():
     rng = np.random.default_rng(0)
-    for role in ("pursuer", "evader"):
-        env = GmatFinalEnv(config={"role": role,
-                                   "opponent_policy": lambda o: rng.uniform(-1, 1, 3).astype(np.float32)})
-        obs, _ = env.reset(seed=0)
+    outcomes = {}
+    for ep in range(12):
+        env = GmatFinalEnv({"role": "random", "opponent": "random", "rule_ranges": True,
+                            "scenario": "mixed", "use_intercept_obs": False, "reward": {"shape": 0.0}})
+        obs, _ = env.reset(seed=ep)
         done = False
         while not done:
-            obs, r, term, trunc, info = env.step(env.action_space.sample())
+            obs, r, term, trunc, info = env.step(rng.uniform(-1, 1, 3))
             assert env.observation_space.contains(obs) and np.isfinite(r)
+            for rec in env.game.history:
+                assert rec["dv_mps"] <= env.game.rules.max_dv(rec["side"]) + 1e-6
             done = term or trunc
-        assert info["outcome"] is not None
-    print("[OK] 隨機對打：兩種角色都能跑完整 episode 並判定結局")
+        assert info["outcome"] in ("capture", "timeout", "crash_pursuer", "crash_evader")
+        assert env.game.used["pursuer"] <= env.game.rules.fuel_pursuer_mps + 1e-6
+        outcomes[info["outcome"]] = outcomes.get(info["outcome"], 0) + 1
+    assert sum(outcomes.values()) == 12
 
 
-if __name__ == "__main__":
-    test_check_env_both_roles()
-    test_capture_branch()
-    test_timeout_branch()
-    test_crash_branch()
-    test_alternation()
-    test_random_episode_runs()
-    print("\nALL TESTS PASSED")
+def test_shaping_rewards_pursuer_for_reducing_need():
+    """追者推一發完整的短程攔截解（進入碰撞航線，need→0）的塑形獎勵應 > 什麼都不做。"""
+    from agents.analytic import LambertPursuer
+    from physics.frames import rsw_basis
+    cfg = {"role": "pursuer", "opponent": "coast", "scenario": "near_coplanar",
+           "rules": {"max_dv_pursuer_mps": 1500.0, "fuel_pursuer_mps": 3000.0, "window_sec": 300.0,
+                     "t_max_sec": 20000.0}}
+    env = GmatFinalEnv(cfg)
+    env.reset(seed=5)
+    g0 = env.game.clone()
+    dv = LambertPursuer(time_weight_mps=200.0, coast_if_captures=False).act(env.game, "pursuer")
+    assert np.linalg.norm(dv) < 1500.0
+    a = rsw_basis(env.game.r("pursuer"), env.game.v("pursuer")) @ dv / 1500.0
+    _, r_burn, *_ = env.step(a)
+    env.reset(seed=5)
+    assert np.allclose(env.game.r("pursuer"), g0.r("pursuer"))
+    _, r_idle, *_ = env.step(np.zeros(3))
+    assert r_burn > r_idle

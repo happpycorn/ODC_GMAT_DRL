@@ -21,21 +21,27 @@
 ## Repo 佈局
 
 ```
-envs/            Gym 環境
-  base_env.py      共用底座：初始化雙方軌道、施加脈衝、傳播、組觀測、燃料/違規/時間帳
-  preliminary_env.py  初賽語意（B 攔截被動 A）——驗證物理與底座接得起來的場景
-  final_env.py     ★ 決賽核心：回合交替追逃、單 agent + 可插拔對手、勝負判定
-  baselines.py     解析/啟發式基準對手（coast / naive_pursuer / naive_evader）
-physics/         軌道物理引擎（vendored 自 ODC_GMAT_Planner，見 PROVENANCE.md）
-  propagator.py    get_r0_v0（六根數→r,v）、propagate（DOP853）
-  core_math.py     動力學、J2/J3/J4、VNB、撞地檢查（逐字複製）
-  scorer.py        官方計分公式（逐字複製）
-tests/           煙霧測試（uv run python tests/test_final_env.py）
-train.py         SAC + Optuna 超參搜尋（骨架，目前針對 preliminary_env）
+physics/         軌道物理
+  propagator.py    get_r0_v0、propagate（DOP853）          ← vendored 自 Planner（PROVENANCE.md）
+  core_math.py     動力學、J2/J3/J4、VNB、近地點檢查        ← vendored
+  scorer.py        初賽官方計分公式                          ← vendored
+  lambert.py       numba Izzo Lambert（多圈），與 poliastro 比對到機器精度
+  intercept.py     追擊所需 Δv 掃描（TOF × 圈數 × 分支 + J2 打靶）
+  coast.py         雙船滑行 + 窗口內連續偵測捕獲/撞地/最近接近
+  frames.py        RSW(LVLH)、VNB、rv2coe
+game/            純遊戲核心（與 gym 解耦，搜尋/評測/copilot 共用）
+  rules.py         Rules（佔位規則數字）+ RuleRanges（規則分布）
+  scenarios.py     初始幾何家族（near_coplanar / inclined / wild / official_sample…）
+  core.py          Game：回合推進、Δv 裁切、燃料帳、勝負判定、歷程紀錄
+  obs.py           RL 觀測（LVLH、正規化、規則參數、最近接近、追擊所需 Δv）
+agents/          策略：coast / random / LambertPursuer / DvEvader（+ RL 包裝）
+envs/final_env.py  gym 包裝：單 agent + 可插拔對手、role 可隨機、勢能型塑形
+tests/           pytest（uv run python -m pytest tests）
+tools/           離線驗證腳本（例：Lambert vs poliastro）
 METHODOLOGY.md   理論與訓練方法論
 ```
 
-> `final_env.py` 用**佔位參數**搭好了「結構對」的骨架（回合交替、雙方觀測、勝負判定都可跑、check_env 通過）。規則數字（窗口長度、Δv/燃料上限、捕獲半徑、初始軌道、計分）待官方公告（HAP-50）後填入；self-play 訓練管線是 HAP-54。
+> 規則數字全是**佔位**（`game/rules.py`），官方公告（HAP-50）後填 `Rules(...)` 即可；在那之前訓練用 `RuleRanges` 隨機抽規則並把規則放進觀測。
 
 ---
 
@@ -48,10 +54,10 @@ pip install uv
 uv sync          # 每次 git pull 後跑一次，讓環境精確等於 lockfile
 ```
 
-跑超參搜尋（目前針對 `preliminary_env`）：
+跑測試：
 
 ```bash
-uv run train.py
+uv run pytest
 ```
 
 **GMAT 不在訓練迴圈裡**——訓練用 `physics/` 的純 numba 引擎（快、且與 GMAT 交叉驗證到公尺級）；GMAT 只在最終驗證階段用（尚未接，Linear HAP-56）。
@@ -61,8 +67,10 @@ uv run train.py
 ## 現況（2026-09）
 
 - ✅ 物理引擎接好（`physics/`），env 用真實軌道傳播、`check_env` 通過、SAC 端到端可訓練（HAP-51 / HAP-52）。
-- ✅ 決賽環境 `final_env.py`（回合交替追逃、單 agent + 可插拔對手、勝負判定）骨架完成、測試通過（HAP-53）。
-- ⏳ self-play 訓練管線（curriculum + 凍結自我對打）建置中（HAP-54）。
+- ✅ 決賽環境 `final_env.py`（回合交替追逃、單 agent + 可插拔對手、勝負判定）骨架完成（HAP-53）。
+- ✅ 遊戲核心重構 + 正確性修復：窗口內連續事件偵測、Δv 裁切、超時=terminated、規則/幾何隨機化、LVLH 觀測（HAP-101）。
+- ✅ 物理工具箱：numba Lambert、追擊所需 Δv、最近接近、座標系；解析 LambertPursuer / DvEvader（HAP-102）。
+- ⏳ 對打評測系統 + 極小極大搜尋（HAP-103）、self-play 訓練管線（HAP-54）。
 - ⏳ 決賽計分/規則細節待官方公告（HAP-50）。
 
 進度與待辦以 Linear 專案 `ODC_GMAT_DRL`（team Happpycorn / HAP）為準。
