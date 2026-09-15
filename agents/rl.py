@@ -57,7 +57,22 @@ class SB3Agent(Agent):
         return cls(model, meta.get("action_power", 1.0), meta.get("use_intercept_obs", True),
                    deterministic, name, meta.get("action_mode", "direct"))
 
+    safety = True   # 推完軌道撐不到比賽結束 → 減半重試 / 救命推力（與解析 agent 相同的防呆）
+
     def act(self, game, side):
         obs = build_obs(game, side, use_intercept=self.use_intercept_obs)
         a, _ = self.model.predict(obs, deterministic=self.deterministic)
-        return to_dv(game, side, np.asarray(a).reshape(3), resolve_mode(self.action_mode, side), self.action_power)
+        dv = to_dv(game, side, np.asarray(a).reshape(3), resolve_mode(self.action_mode, side), self.action_power)
+        if not self.safety:
+            return dv
+        # sp3 部署評測：RL 躲者 40 局裡自己撞地 5–7 局（策略沒學會顧近地點）
+        from agents.analytic import orbit_survives, rescue_burn
+        dv = game.clip_dv(side, dv)
+        if orbit_survives(game, side, dv):
+            return dv
+        for _ in range(6):
+            dv = dv * 0.5
+            if orbit_survives(game, side, dv):
+                return dv
+        rb = rescue_burn(game, side)
+        return rb if rb is not None else np.zeros(3)
