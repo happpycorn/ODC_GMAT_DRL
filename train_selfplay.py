@@ -27,7 +27,9 @@ ROLES = ("pursuer", "evader")
 EXPERT = {"pursuer": "lambert_pursuer", "evader": "dv_evader"}
 CURRICULUM_OPP = {
     "pursuer": {"name": "pool", "specs": ["coast", "random", "dv_evader_fast"], "probs": [0.3, 0.3, 0.4]},
-    "evader": {"name": "pool", "specs": ["lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 60.0}]},
+    # 訓練時用快速版解析追者（env 一步 20 ms → ~5 ms）；評測仍用完整版
+    "evader": {"name": "pool", "specs": ["lambert_pursuer_fast",
+                                         {"name": "lambert_pursuer_fast", "time_weight_mps": 60.0}]},
 }
 EVAL_OPPONENTS = {
     "pursuer": ["coast", "dv_evader_fast", "dv_evader"],
@@ -36,9 +38,12 @@ EVAL_OPPONENTS = {
 
 
 # ---------------------------------------------------------------------------- env
+ACTION_MODE = {"pursuer": "guided", "evader": "direct"}
+
+
 def env_config(role, opponent, args):
     return {
-        "role": role, "opponent": opponent,
+        "role": role, "opponent": opponent, "action_mode": ACTION_MODE[role],
         "rule_ranges": args.rules == "ranges",
         "rules": {} if args.rules in ("ranges", "default") else json.load(open(args.rules)),
         "scenario": args.scenario,
@@ -66,7 +71,7 @@ def make_vec(role, opponent, args, seed):
 def _bc_worker(job):
     role, expert_spec, opp_spec, rules_mode, scenario, seed, n_episodes = job
     from agents import make_agent
-    from game.actions import dv_to_action
+    from game.actions import GUIDED_DEFAULT_ACTION, dv_to_action
     from game.core import Game
     from game.obs import build_obs
     from game.rules import RuleRanges, Rules
@@ -84,7 +89,8 @@ def _bc_worker(job):
             if side == role:
                 dv = expert.act(g, side)
                 X.append(build_obs(g, side))
-                Y.append(dv_to_action(g, side, dv))
+                # guided 追者的專家 = LambertPursuer 預設參數 → BC 目標是固定的預設 action
+                Y.append(GUIDED_DEFAULT_ACTION if ACTION_MODE[role] == "guided" else dv_to_action(g, side, dv))
             else:
                 dv = opp.act(g, side)
             g.play_turn(dv)
@@ -191,7 +197,7 @@ def main():
         path = os.path.join(run, f"{role}_{tag}.zip")
         model.save(path)
         write_meta(path, {"algo": "PPO", "role": role, "action_power": 1.0, "use_intercept_obs": True,
-                          "run": args.name, "tag": tag})
+                          "action_mode": ACTION_MODE[role], "run": args.name, "tag": tag})
         return path
 
     def record(stage, role, path, steps):

@@ -26,7 +26,7 @@ from gymnasium import spaces
 
 from agents import make_agent
 from agents.analytic import need_horizon, pursuer_need
-from game.actions import action_to_dv
+from game.actions import resolve_mode, to_dv
 from game.core import Game
 from game.obs import OBS_DIM, build_obs
 from game.rules import SIDES, RuleRanges, Rules, other
@@ -48,6 +48,8 @@ class GmatFinalEnv(gym.Env):
         self.scenario = cfg.get("scenario", "default")
         self.set_opponent(cfg.get("opponent", "coast"))
         self.action_power = float(cfg.get("action_power", 1.0))
+        # "direct" / "guided"（只對追者生效）/ {"pursuer": .., "evader": ..}，見 game/actions.py
+        self.action_mode = cfg.get("action_mode", "direct")
         self.use_intercept_obs = bool(cfg.get("use_intercept_obs", True))
         rew = cfg.get("reward", {})
         self.r_win = float(rew.get("win", 10.0))
@@ -131,7 +133,7 @@ class GmatFinalEnv(gym.Env):
             g.play_turn(opp.act(g, g.mover))
 
     def _action_to_dv(self, action):
-        return action_to_dv(self.game, self.role, action, self.action_power)
+        return to_dv(self.game, self.role, action, resolve_mode(self.action_mode, self.role), self.action_power)
 
     def _refresh_need(self):
         g = self.game

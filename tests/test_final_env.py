@@ -50,6 +50,31 @@ def test_action_never_exceeds_cap_and_random_play_terminates():
     assert sum(outcomes.values()) == 12
 
 
+def test_guided_pursuer_default_action_captures_passive_target():
+    """guided 模式下固定的預設 action = LambertPursuer 預設行為 → 對被動目標要抓得到。"""
+    from game.actions import GUIDED_DEFAULT_ACTION, guided_params
+    w, f, h = guided_params(GUIDED_DEFAULT_ACTION)
+    assert abs(w - 10.0) < 1e-9 and f == 1.0 and h == 1.0
+    env = GmatFinalEnv({"role": "pursuer", "opponent": "coast", "action_mode": "guided",
+                        "scenario": "near_coplanar", "use_intercept_obs": False, "reward": {"shape": 0.0}})
+    env.reset(seed=11)
+    done = False
+    while not done:
+        _, r, done, _, info = env.step(GUIDED_DEFAULT_ACTION)
+    assert info["outcome"] == "capture"
+    assert r > 0
+
+
+def test_guided_mode_ignored_for_evader():
+    env = GmatFinalEnv({"role": "evader", "action_mode": "guided", "opponent": "coast"})
+    env.reset(seed=0)
+    env.step(np.array([0.0, 1.0, 0.0]))
+    evader_recs = [r for r in env.game.history if r["side"] == "evader"]
+    assert evader_recs, "躲者的回合沒被執行"
+    # direct 模式：|a| = 1 → 推滿單次上限（guided 設定對躲者無效）
+    assert abs(evader_recs[0]["dv_mps"] - env.game.rules.max_dv_evader_mps) < 1e-6
+
+
 def test_shaping_rewards_pursuer_for_reducing_need():
     """追者推一發完整的短程攔截解（進入碰撞航線，need→0）的塑形獎勵應 > 什麼都不做。"""
     from agents.analytic import LambertPursuer

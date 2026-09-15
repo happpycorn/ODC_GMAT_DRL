@@ -85,8 +85,9 @@ class LambertPursuer(Agent):
     name = "lambert_pursuer"
 
     def __init__(self, time_weight_mps=10.0, pts_per_period=24, max_revs=2, j2_shoot=True,
-                 coast_if_captures=True, max_pts=240):
+                 coast_if_captures=True, max_pts=240, horizon_frac=1.0):
         self.time_weight_mps = time_weight_mps   # 每晚一個窗口抓到，願意多付多少 m/s
+        self.horizon_frac = horizon_frac         # 只考慮 TOF <= 剩餘時間 × frac 的攔截（至少一個窗口）
         self.pts_per_period = pts_per_period     # TOF 網格密度跟軌道週期走（固定點數會漏極小值）
         self.max_pts = max_pts
         self.max_revs = max_revs
@@ -111,6 +112,8 @@ class LambertPursuer(Agent):
                 return np.zeros(3)
 
         horizon = game.time_left
+        if self.horizon_frac < 1.0:
+            horizon = min(horizon, max(self.horizon_frac * horizon, game.next_window() + 120.0))
         if horizon <= 60.0:
             return np.zeros(3)
         n_tof = int(np.clip(math.ceil(horizon / game.period("pursuer") * self.pts_per_period), 8, self.max_pts))
@@ -156,7 +159,12 @@ class LambertPursuer(Agent):
         # 其他情況（部分推力、或躲者還有機會閃開）推完的軌道必須撐到比賽結束：
         # 不行就減半重試；連不推都會再入的話改做救命推力。
         if full and tof <= game.next_window():
-            return dv
+            # 只有「真的會命中」才免檢查：J2 打靶沒收斂時 Lambert 二體解會偏幾公里，
+            # 沒抓到就會留在一條可能撞地的轉移軌道上（copilot 演練抓到過）
+            rp_t, _ = propagate(mu, rp, vp + dv / 1000.0, tof, gd)
+            re_t, _ = propagate(mu, re, ve, tof, gd)
+            if np.linalg.norm(rp_t - re_t) <= 0.5 * R.capture_radius_km or orbit_survives(game, side, dv):
+                return dv
         if orbit_survives(game, side, dv):
             return dv
         for _ in range(8):

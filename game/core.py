@@ -65,6 +65,23 @@ class Game:
         g.initial_elements = {"pursuer": dict(orbit_pursuer), "evader": dict(orbit_evader)}
         return g
 
+    @classmethod
+    def from_snapshot(cls, rules: Rules, rp, vp, re, ve, *, t=0.0, t_max=None, used=None, mover=None,
+                      mu: float = EARTH_MU):
+        """從比賽進行中的某個狀態建 Game（copilot 用：當天看到的是中途狀態）。
+
+        t_max 給絕對秒數（從比賽開始算）；未給時沿用 rules 的定義（以「此刻」追者週期換算，
+        只適合 t=0）。
+        """
+        R = rules if t_max is None else rules.with_(t_max_sec=float(t_max))
+        g = cls(R, rp, vp, re, ve, mu)
+        g.t = float(t)
+        g.used = {"pursuer": 0.0, "evader": 0.0, **(used or {})}
+        g.mover = mover or R.first_mover
+        if g.t >= g.t_max - 1e-6 and g.outcome is None:
+            g.outcome = "timeout"
+        return g
+
     def clone(self) -> "Game":
         g = copy.copy(self)
         g._r = {s: a.copy() for s, a in self._r.items()}

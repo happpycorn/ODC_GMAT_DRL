@@ -13,6 +13,9 @@ REGISTRY = {
     "random": RandomAgent,
     "pool": PoolAgent,
     "lambert_pursuer": LambertPursuer,
+    # 訓練對手用的快速版（決策 ~1.4 ms vs 完整版 ~4–20 ms）：少一圈、網格稀、不做 J2 打靶
+    "lambert_pursuer_fast": lambda **kw: LambertPursuer(**{"max_revs": 1, "pts_per_period": 12,
+                                                          "j2_shoot": False, **kw}),
     "dv_evader": DvEvader,
     "dv_evader_fast": lambda **kw: DvEvader(directions="axes", mags=(1.0,), **kw),
     "minimax_pursuer": MinimaxPursuer,
