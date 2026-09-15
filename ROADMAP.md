@@ -16,7 +16,7 @@
 | 2 | 解析 agent + 對打評測 + rollout 規劃器 | ✅ 09-15 | HAP-103 |
 | 2.5 | GMAT 重播一致性（< 10 m） | ✅ 待官方 ForceModel | HAP-56 |
 | 3 | self-play 訓練（BC → curriculum → league） | ✅ sp3 完成：持平專家、未超越（E9） | HAP-54 |
-| 4 | RL × rollout 整合、決定 RL 當天角色 | ⏳ 部署 + 評測中 | HAP-105 |
+| 4 | RL × rollout 整合、決定 RL 當天角色 | ✅ 無增益 → 主腦純 rollout（E11） | HAP-105 |
 | 4.1 | 規則平衡地圖 → 當天查表 | ✅ 6 張地圖 + rollout 確認（E8、E10） | HAP-106 |
 | 4.2 | Exploitability 測試 | ☐ | HAP-108 |
 | 5 | copilot CLI + 當天手冊 | ✅ 初版 | HAP-104 / HAP-55 |
@@ -25,7 +25,8 @@
 | — | 規則變體：一回合多發 | ☐ 視 HAP-50 | HAP-107 |
 
 ## 近期待辦
-- [ ] sp3 → `tools/promote_model.py`（執行中）→ RL 當 rollout 候選/對手模型的評測（HAP-105）
+- [x] sp3 → `tools/promote_model.py` → RL 當 rollout 候選/對手模型的評測（HAP-105：無增益）
+- [ ] 對手風格辨識：從對手前幾回合行為挑對手模型（E11 顯示猜中對手 +9 個百分點）
 - [x] 平衡地圖六張 + rollout 確認（HAP-106）
 - [x] copilot `import` 讀 GMAT 報表、rollout 平行化（HAP-109）
 - [ ] Exploitability：rollout 大腦被針對時多弱（HAP-108）

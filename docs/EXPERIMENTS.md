@@ -118,6 +118,27 @@
 - **結論**：RL 在 BC 暖啟動的水準附近震盪，**12 輪 league 沒有明顯超越專家**（24 局評測的 95% 區間 ±20 個百分點，看不出趨勢）。guided 追者的策略參數空間（時間偏好/推力比例/horizon）本身的上限就接近 LambertPursuer；躲者直接 Δv 也沒學出比 DvEvader 更好的閃避。對照 E7：**rollout 規劃器（不需訓練）明顯更強**。
 - **下一步**：RL 不當主腦；改評估它當 rollout 的候選產生器或對手模型（HAP-105）。
 
+## E11 RL × rollout 整合（HAP-105）
+- **設定**：對稱規則（configs/rulesets/symmetric.json）、mixed 幾何、24 局；已部署 models/pursuer.zip（sp3 it4）、models/evader.zip（sp3 it8，含撞地防呆）。
+- **產物**：`reports/hap105_pursuer.md`、`reports/hap105_evader.md`
+
+| 追者大腦 | vs DvEvader | vs rollout 躲者 | vs RL 躲者 | 平均 | 決策 ms |
+|---|---|---|---|---|---|
+| rollout | 54% | 54% | 62% | **57%** | ~137 |
+| rollout + RL 當對手模型 | 50% | 46% | 71% | 56% | ~320 |
+| rollout + RL 當候選 | 58% | 50% | 67% | 58% | ~165 |
+| RL 單獨 | 8% | 0% | 12% | 7% | ~19 |
+
+| 躲者大腦 | 平均存活（vs Lambert / rollout / RL 追者） | 決策 ms |
+|---|---|---|
+| rollout | **81%** | ~120 |
+| rollout + RL 當候選 | 78% | ~150 |
+| rollout + RL 當對手模型 | 76% | ~280 |
+| RL 單獨 | 69% | ~4 |
+
+- **結論**：RL 不論當候選或對手模型都**沒有統計上可見的增益**，還讓決策變慢 1.2–2.3 倍；單獨使用在對稱規則下是最弱的大腦。**當天主腦 = 純 rollout 規劃器**；RL 模型保留為 copilot 的參考意見與極快速（4 ms）的訓練/推演對手。
+- **細節觀察**：rollout 追者把 RL 躲者當對手模型時，對 RL 躲者勝率升到 71%（對手模型對上真實對手時確實有用），但對其他躲者掉——**「猜中對手」有利、「猜錯」有害**，這正是 exploitability 測試（E12）要量的東西。
+
 ## E10 用 rollout 大腦確認平衡結論
 - **產物**：`reports/rollout_rules_{symmetric,pursuer_fuel_2x,evader_small_burn_big_fuel}.md`（24 局，mixed 幾何）
 
