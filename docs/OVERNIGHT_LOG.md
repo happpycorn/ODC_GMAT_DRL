@@ -22,3 +22,10 @@
 - Linear：母卡 HAP-117；① HAP-118、② HAP-119、③ HAP-120（皆 In Progress）。
 - 三個子任務各在自己的 worktree（`.claude/worktrees/agent-*`）。注意：worktree 預設從舊的 `origin/main`（6 月）開，brief 第 0 步改成先 `git merge --ff-only master`。
 - master 逐位元基準（`80dc622`，主 checkout）：預設規則、ranking_like、ranking_like_2burn 各 6 局 × 6 配對，之後合併改到 agents/ 的分支時在同一 checkout 前後比對。
+
+## 00:05 用量上限中斷後恢復
+
+- 22:30 左右 5 個 max-effort 代理同時跑，約 30 分鐘用完 5 小時額度，四個子任務全部 429 中斷，空轉到 00:00 重置。
+- 恢復：①②③ 用原代理接續（進度在各自 worktree：① 改前基準已跑完、② rollout 躲者基準已跑完、③ 改前基準要重跑）。
+  ④ 雙曲線飛掠中斷前沒有改動，worktree 已被自動清掉，等前三項有一項完成再重開。
+- 配速改成同時 2–3 個代理；長評測用 run_in_background 丟背景、等完成通知，不輪詢；brief／回報精簡。
