@@ -3,7 +3,11 @@
     make_agent("coast")
     make_agent({"name": "lambert_pursuer", "time_weight_mps": 30})
     make_agent("sb3:runs/xxx/pursuer_final.zip")      # 訓練好的 RL 策略（見 agents/rl.py）
+    make_agent("py:agents.foo:BarEvader")             # 任意模組裡的類別/工廠，免改 REGISTRY
+    make_agent({"name": "py:agents.foo:BarEvader", "k": 1})
 """
+import importlib
+
 from agents.base import Agent, CallableAgent, CoastAgent, PoolAgent, RandomAgent
 from agents.analytic import DvEvader, EscapeEvader, LambertPursuer
 from agents.search import MinimaxEvader, MinimaxPursuer
@@ -38,6 +42,14 @@ def _rollout(side, **kw):
     return RolloutPlanner(side, **kw)
 
 
+def _py_agent(path, **kw):
+    """'模組:類別或工廠'（例 agents.foo:BarEvader）→ agent。新 agent 先用這個規格，穩定後再進 REGISTRY。"""
+    mod, _, attr = path.partition(":")
+    if not attr:
+        raise KeyError(f"py: 規格要寫成 'py:模組:類別'，收到 {path!r}")
+    return getattr(importlib.import_module(mod), attr)(**kw)
+
+
 def make_agent(spec) -> Agent:
     if isinstance(spec, Agent):
         return spec
@@ -45,6 +57,8 @@ def make_agent(spec) -> Agent:
         if spec.startswith("sb3:"):
             from agents.rl import SB3Agent
             return SB3Agent.load(spec[4:])
+        if spec.startswith("py:"):
+            return _py_agent(spec[3:])
         if spec not in REGISTRY:
             raise KeyError(f"未知 agent {spec!r}，可用：{sorted(REGISTRY)} 或 'sb3:<path>'")
         a = REGISTRY[spec]()
@@ -56,6 +70,8 @@ def make_agent(spec) -> Agent:
         if name == "sb3":
             from agents.rl import SB3Agent
             return SB3Agent.load(**kw)
+        if name.startswith("py:"):
+            return _py_agent(name[3:], **kw)
         return REGISTRY[name](**kw)
     if callable(spec):
         return CallableAgent(spec)

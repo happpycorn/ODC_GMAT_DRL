@@ -1,0 +1,18 @@
+# 夜間自主研究日誌（2026-10-20 起）
+
+主 session 在這台主機的 `/home/corn/ODC_GMAT_DRL` 主 checkout 統籌，研究子任務各自在自己的 git worktree／分支上做，
+驗收後合併進 master。每合併一項就在這裡追加一段（時間、做了什麼、結論與數字、commit）。
+規則數字全是假設：四強賽官方規則尚未公布，決賽 2026-11-09。
+
+## 22:10 開工
+
+- 讀完 README / ROADMAP / CONTEST_DAY_FINAL / EXPERIMENTS（E14–E19）、兩個 repo 的記憶、排位賽規則摘要。
+- master `7c9de70` 基準：`uv run pytest` 73 項全綠（含 GMAT）。機器 8 實體核心（16 SMT）、記憶體 11 GB。
+- 先在 master 補三樣共用基礎，讓各子任務不用改同一個檔案：
+  - `make_agent("py:模組:類別")`：新 agent 寫在自己的新模組，不必改 `agents/__init__.py` 的 REGISTRY。
+  - `evaluation/stats.py` + `tools/paired_compare.py`：逐局配對與雙尾精確符號檢定（E16/E17 的 p 值可重現）。
+  - `docs/notes/`：子任務的結果筆記，主 session 整合成 E20 之後的編號。
+- 研究清單與排程：
+  - 第一批（平行）：① 多發時放寬存活檢查（追者）② 躲者改進 ③ 規則敏感度地圖（250 m/s 級）
+  - 之後依檔案不重疊排：④ 雙曲線／飛掠幾何 ⑤ copilot 整體策略評測與決策時間 ⑥ 全攝動彩排擴大
+    ⑦ 對手風格辨識 ⑧ 排位版規則重訓 RL（sp4）⑨ 各項結論在另一組規則上再驗
