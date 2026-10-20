@@ -98,6 +98,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 - 高能量逃逸（徑向+沿軌道推高遠地點）在對稱規則下非常有效，但**推完要確認近地點安全**。
 - 純滑行最近接近 < 捕獲半徑時一定要動。
 - **雙方單發上限都大（≥ ~1000 m/s）且燃料對稱時：考慮開局連推兩發高能量逃逸**（徑向+沿軌道推滿，copilot 的 `escape_evader` 大腦）。實測對稱規則 1500/3000 下存活 88%（rollout 躲者 72%），但單發上限小或燃料不對稱時會輸——看 copilot 推演裡它對 `rollout_pursuer` 對手模型的結果再決定。
+- **規則若照排位賽（單發 250 m/s、總 3 km/s）：不要逃逸。** 實測 rollout 追者 20/20 全抓到逃逸躲者；這組規則下 rollout 躲者最強（存活 80%）。規則集已備好：`configs/rulesets/ranking_like.json`（docs/EXPERIMENTS.md E14）。
 - **燃料多、單發上限小的時候：每回合小推、持續閃避**，比囤積燃料做一大發有效得多（平衡地圖：躲者 150 m/s × 3000 m/s 時解析追者只贏 8%）。追者一次重算就能追上一大發機動，但每回合都要為小閃避重新攔截。
 
 **查表（reports/balance_*.md，解析大腦 LambertPursuer vs DvEvader，mixed 幾何）**
