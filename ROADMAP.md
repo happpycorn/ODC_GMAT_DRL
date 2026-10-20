@@ -23,7 +23,8 @@
 | 5.1 | copilot 狀態匯入（GMAT 報表）、推演排序 ★ 推薦、rollout 平行化 | ✅ | HAP-109 / HAP-104 |
 | 5.2 | 當天流程彩排（GMAT 當真實世界跑完整 SOP） | ✅ 兩場皆勝、決策最長 ~14 s（E13） | HAP-55 |
 | 6 | 規則公告 → 鎖定參數 → 演練 → 凍結 | ☐ 阻塞於 HAP-50 | HAP-50 / HAP-55 |
-| — | 規則變體：一回合多發 | ☐ 視 HAP-50 | HAP-107 |
+| — | 規則變體：一回合多發 | ✅ 引擎/copilot/GMAT 支援；多發大幅利於追者（E17） | HAP-107 |
+| — | 全攝動彩排（GMAT 排位賽官方模型當真實世界） | ✅ 工具完成（E18） | HAP-55 |
 
 ## 近期待辦
 - [x] sp3 → `tools/promote_model.py` → RL 當 rollout 候選/對手模型的評測（HAP-105：無增益）
@@ -33,6 +34,8 @@
 - [x] Exploitability：rollout 大腦被針對時多弱（HAP-108）
 - [x] 排位賽版規則集（250/3000 對稱）小批評測：開局逃逸翻盤成最弱、rollout 躲者最強（E14）
 - [x] 排位賽版規則下用 `copilot.py drill` 確認 ★ 推薦不會選逃逸大腦（E14b：0/39 回合；但會分批往逃逸方向推）
-- [ ] 排位賽版規則下的 GMAT 彩排（`tools/dress_rehearsal.py`，最好搭配全攝動）
+- [x] 排位賽版規則大批評測 + exploitability（E15：rollout 躲者在這組規則下可被針對 +29）
+- [x] 一回合多發（HAP-107，E17）
+- [x] 全攝動 GMAT 彩排工具（E18）
 - [ ] 規則公告後：在正式規則上重跑 E7/E11/E12 的關鍵對打（大腦選擇可能隨規則翻轉，例如逃逸躲者）
 - [ ] 規則公告（HAP-50）→ `configs/rules_final.json` → 重跑評測/平衡 → 微調 RL → 凍結 `models/`

@@ -41,8 +41,16 @@ from physics.frames import rsw_basis, rv2coe, vnb_basis
 
 # 第一個是預設採用的大腦。rollout 規劃器是目前評測最強（reports/rollout_eval_default.md）：
 # 追者對 DvEvader 50%（LambertPursuer 17%）、躲者對 LambertPursuer 存活 93%，決策 ~140 ms
+# 強化版 rollout 追者：對手模型多一個 rollout 躲者輕量版（E16：排位版規則 250/3000 下對 rollout 躲者
+# 29% → 71%，對稱 1500/3000 下略弱）——規則相依，所以只當候選大腦，由推演表排序決定用不用。
+# 每步 ~2.4 s，推演表裡它只決定第一發，之後交給預設 rollout 追者（_table_cont），不然一次推演要好幾分鐘。
+STRONG_ROLLOUT_PURSUER = {"name": "rollout_pursuer",
+                          "opponents": ["coast", "dv_evader_fast",
+                                        {"name": "rollout_evader", "candidates": ["dv_evader_fast"],
+                                         "opponents": ["lambert_pursuer_fast"]}],
+                          "_table_cont": "rollout_pursuer"}
 DEFAULT_BRAINS = {"pursuer": ["rollout_pursuer", "lambert_pursuer",
-                              {"name": "lambert_pursuer", "time_weight_mps": 60.0}],
+                              {"name": "lambert_pursuer", "time_weight_mps": 60.0}, STRONG_ROLLOUT_PURSUER],
                   # escape_evader 只當參考：燃料與單發上限都大且對稱時實測最強（88% vs 72%），
                   # 但隨機規則下會輸 rollout（HAP-108，docs/EXPERIMENTS.md E12）
                   "evader": ["rollout_evader", "dv_evader", "escape_evader"]}
@@ -163,13 +171,21 @@ def burn_formats_rv(r, v, dv_eci_mps):
     }
 
 
+def _with_workers(b, workers):
+    """rollout 大腦加上平行推演的 worker 數（字串或 dict 規格都可以）。"""
+    if b in ("rollout_pursuer", "rollout_evader"):
+        return {"name": b, "workers": workers}
+    if isinstance(b, dict) and b.get("name") in ("rollout_pursuer", "rollout_evader") and "workers" not in b:
+        return {**b, "workers": workers}
+    return b
+
+
 def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
     g = game_from_state(st)
     side = st["role"]
     if not brains:
         workers = int(os.environ.get("COPILOT_WORKERS", max(1, min(8, (os.cpu_count() or 2) - 2))))
-        brains = [{"name": b, "workers": workers} if b in ("rollout_pursuer", "rollout_evader") else b
-                  for b in DEFAULT_BRAINS[side]]
+        brains = [_with_workers(b, workers) for b in DEFAULT_BRAINS[side]]
         deployed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{side}.zip")
         if os.path.exists(deployed):              # tools/promote_model.py 部署的 RL 策略自動加入
             brains.append("sb3:" + deployed)
@@ -183,7 +199,11 @@ def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
         g.mover = side
     opps = [(o, make_agent(o)) for o in opp_models]
     for b in brains:
+        table_cont = b.get("_table_cont") if isinstance(b, dict) else None
+        if table_cont is not None:
+            b = {k: v for k, v in b.items() if k != "_table_cont"}
         agent = make_agent(b)
+        table_agent = make_agent(table_cont) if table_cont is not None else agent   # 推演表的後續步
         t0 = time.perf_counter()
         if g.rules.burns_per_turn <= 1:
             dv = g.clip_dv(side, agent.act(g, side))
@@ -197,7 +217,7 @@ def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
         if rollouts:
             for name, oa in opps:
                 oa.reset(seed=0)
-                entry["rollouts"].append({"opponent": name, **rollout(g, side, plan, agent, oa)})
+                entry["rollouts"].append({"opponent": name, **rollout(g, side, plan, table_agent, oa)})
         out["advice"].append(entry)
     if rollouts and out["advice"]:
         out["ranking"] = rank_advice(out["advice"], side)

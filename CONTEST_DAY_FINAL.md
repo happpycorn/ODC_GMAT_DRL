@@ -20,7 +20,7 @@
 
 | # | 問題 | 對應 `Rules` 欄位 / 影響 |
 |---|---|---|
-| 1 | 一個回合（一方）有多久？一回合能下幾發？ | `window_sec`（若可多發 → 告訴主控，copilot 目前假設一發/回合） |
+| 1 | 一個回合（一方）有多久？一回合能下幾發？發與發最少隔多久？ | `window_sec`、`burns_per_turn`、`min_burn_gap_sec`（copilot 支援多發，會列出整個窗口每一發的時刻與 Δv） |
 | 2 | 單次機動 Δv 上限？追/躲一樣嗎？ | `max_dv_pursuer_mps` / `max_dv_evader_mps` |
 | 3 | 總燃料（總 Δv）？追/躲一樣嗎？ | `fuel_pursuer_mps` / `fuel_evader_mps` |
 | 4 | 「靠近」的判定距離？是任何時刻還是只看回合結束？ | `capture_radius_km`（我們的引擎是**連續**偵測；若官方只看端點，策略要瞄準窗口末） |
@@ -98,7 +98,9 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 - 高能量逃逸（徑向+沿軌道推高遠地點）在對稱規則下非常有效，但**推完要確認近地點安全**。
 - 純滑行最近接近 < 捕獲半徑時一定要動。
 - **雙方單發上限都大（≥ ~1000 m/s）且燃料對稱時：考慮開局連推兩發高能量逃逸**（徑向+沿軌道推滿，copilot 的 `escape_evader` 大腦）。實測對稱規則 1500/3000 下存活 88%（rollout 躲者 72%），但單發上限小或燃料不對稱時會輸——看 copilot 推演裡它對 `rollout_pursuer` 對手模型的結果再決定。
-- **規則若照排位賽（單發 250 m/s、總 3 km/s）：不要逃逸。** 實測 rollout 追者 20/20 全抓到逃逸躲者；這組規則下 rollout 躲者最強（存活 80%）。規則集已備好：`configs/rulesets/ranking_like.json`（docs/EXPERIMENTS.md E14）。
+- **規則若照排位賽（單發 250 m/s、總 3 km/s）：不要逃逸。** 實測 rollout 追者 20/20、48 局中 94% 抓到逃逸躲者；這組規則下 rollout 躲者最強（存活約 60–70%）。`adaptive_evader` 在這組規則下會觸發逃逸，**不要用**。規則集已備好：`configs/rulesets/ranking_like.json`（docs/EXPERIMENTS.md E14、E15）。
+- **追者對手模型**：規則像排位賽（單發小、燃料對稱）時，copilot 推演表裡的「強化版 rollout 追者」（對手模型多一個 rollout 躲者）對最強躲者 29% → 71%（E16）；大推力對稱規則下它略弱。照 ★ 推薦選就好，兩者都在表上。
+- **一回合能多發時，追者大優勢**：rollout 追者對 rollout 躲者從 29% 升到 75–83%（窗口內對手不動，第二發等於完美資訊的中途修正；E17）。抽到躲者就以拖延、逼對方耗油為主。
 - **燃料多、單發上限小的時候：每回合小推、持續閃避**，比囤積燃料做一大發有效得多（平衡地圖：躲者 150 m/s × 3000 m/s 時解析追者只贏 8%）。追者一次重算就能追上一大發機動，但每回合都要為小閃避重新攔截。
 
 **查表（reports/balance_*.md，解析大腦 LambertPursuer vs DvEvader，mixed 幾何）**
@@ -125,7 +127,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 | 筆電 copilot 當掉 / 環境壞 | 備機（事先 `uv sync` 好）；最壞手動：GMAT 測試電腦跑 Lambert（Planner 的 Target 腳本） |
 | copilot 與 GMAT 差很多 | 以 GMAT 為準；檢查力模型（第二節 #7）、單位（m/s vs km/s）、座標系 |
 | 官方狀態只給六根數 | 局勢檔用 `elements`（角度是度）；近圓軌道 AOP/TA 退化沒關係，位置速度重建一致 |
-| 規則跟我們假設差很多（例如回合內可多發） | 先用 `--no-rollout` 的單發建議；多發時把一發拆成多次、每次重跑 advise |
+| 規則跟我們假設差很多 | 回合內可多發：規則檔填 `burns_per_turn`、`min_burn_gap_sec`，copilot 直接給整個窗口的多發計畫（E17）；其他差異先用 `--no-rollout` 的建議 |
 | 沒有網路 | 全部本地可跑（numba 快取、模型檔都在 repo / models/） |
 
 ---
@@ -134,6 +136,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 
 - [ ] 兩台筆電 `git pull && uv sync && uv run pytest`（全綠，含 GMAT 重播測試）
 - [ ] 各跑一場彩排：`uv run python tools/dress_rehearsal.py --role pursuer` 與 `--role evader`（GMAT 當真實世界，確認整條流程與每回合耗時；參考值：決策平均 1.5–3.9 s、最長 ~14 s）
+- [ ] 用正式規則加全攝動再各跑一場：`--rules configs/rules_final.json --force-model ranking_full`（GMAT 用排位賽官方模型當真實世界、每回合把引擎重設成 GMAT 狀態，賽後並列 GMAT 與引擎的勝負判定；E18）
 - [ ] `uv run python copilot.py drill --role pursuer` 與 `--role evader` 各跑一場（預熱 numba 快取）
 - [ ] `models/` 放最新的 pursuer / evader 模型（`evaluate.py` 確認過）
 - [ ] 印出本手冊第二、四節

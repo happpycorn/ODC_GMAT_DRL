@@ -43,6 +43,9 @@ uv run python copilot.py drill --role evader --opponent rollout_pursuer         
 
 # 當天流程彩排：GMAT 當真實世界，每回合 GMAT 重播 → import → advise → 下指令
 uv run python tools/dress_rehearsal.py --role pursuer --opponent dv_evader
+# 同上，但 GMAT 用排位賽官方全攝動模型、每回合把引擎重設成 GMAT 狀態、賽後 GMAT 判勝負（E18）
+uv run python tools/dress_rehearsal.py --role evader --opponent rollout_pursuer \
+    --rules configs/rulesets/ranking_like.json --force-model ranking_full
 
 # 對打評測：追者 × 躲者 × 同一批隨機（規則, 幾何），輸出 reports/<name>.md
 uv run python evaluate.py --pursuers "lambert_pursuer;rollout_pursuer" \
@@ -102,10 +105,13 @@ tests/             pytest
 
 ---
 
-## 現況（2026-09-16）
+## 現況（2026-10-20）
 
 - ✅ 物理：自寫 Lambert / 攔截掃描 / 連續事件偵測；**GMAT 重播位置差 < 10 m**（degree 0/2/4）
 - ✅ 遊戲核心、解析 agent、**rollout 規劃器**、對打評測、規則平衡地圖（HAP-101/102/103/106）
 - ✅ self-play 管線與 sp3 訓練（持平專家）、RL × rollout 整合評測（無增益）（HAP-54/105）
 - ✅ exploitability 測試（HAP-108）、copilot（匯入、推演排序、GMAT 腳本）、當天手冊、GMAT 彩排工具（HAP-104/109/55）
+- ✅ 排位賽版規則（250/3000）評測：逃逸翻盤成最弱、rollout 躲者最強、強化版 rollout 追者（E14–E16）
+- ✅ 一回合多發（`Rules.burns_per_turn`，HAP-107）：多發大幅利於追者（E17）
+- ✅ 全攝動 GMAT 彩排（`--force-model ranking_full`）：每回合匯入官方狀態時，引擎單窗口誤差公尺級、勝負與 GMAT 一致（E18）
 - ⏳ 決賽規則待官方公告（HAP-50）→ 公告後在正式規則上重跑關鍵評測並鎖定大腦

@@ -62,3 +62,17 @@ def test_gmat_step_matches_full_replay_under_full_perturbation():
     assert np.linalg.norm(state["evader"][0] - last[7:10]) < 1e-3
     truth = gmat_truth(g, "ranking_full")
     assert truth["d_min_km"] <= min(r["window_min_dist_km"] for r in g.history) + 1.0
+
+
+def test_gmat_truth_sees_past_engine_capture_instant():
+    """引擎在進捕獲球的瞬間結束比賽；GMAT 判定要把窗口滑完，不能只看到剛好 5 km。"""
+    from game.core import Game
+    from game.rules import Rules
+    from tools.gmat_verify import gmat_truth
+    rp, vp = np.array([7000.0, 0.0, 0.0]), np.array([0.0, 7.546, 0.0])
+    re, ve = rp + np.array([0.0, 8.0, 0.0]), vp - np.array([0.0, 0.03, 0.0])
+    g = Game(Rules(capture_radius_km=5.0, t_max_sec=3000.0), rp, vp, re, ve)
+    g.play_turn(np.zeros(3))
+    assert g.outcome == "capture" and g.history[-1]["coast_sec"] < 300.0
+    truth = gmat_truth(g, "ranking_full")
+    assert truth["t_capture_sec"] is not None and truth["d_min_km"] < 4.0

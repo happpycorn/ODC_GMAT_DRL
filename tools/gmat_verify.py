@@ -271,8 +271,19 @@ def gmat_step(rules, state, rec, force_model="ranking_full", console=GMAT_CONSOL
 
 
 def gmat_truth(game, force_model="ranking_full", console=GMAT_CONSOLE):
-    """GMAT 重播整局（密集報表），回傳真實最近距離與捕獲時刻（官方會用的判定）。"""
-    rows, dense = run_gmat(game_to_script(game, "__REPORT__", force_model, dense_path="__DENSE__"),
+    """GMAT 重播整局（密集報表），回傳真實最近距離與捕獲時刻（官方會用的判定）。
+
+    引擎在捕獲/撞地的瞬間就結束比賽，最後一個窗口只滑到事件時刻；那樣 GMAT 只看得到「剛好
+    碰到邊界」。所以重播時把最後一個窗口補滿（到窗口結束或 T_max），讓 GMAT 自己判斷有沒有進去。"""
+    from types import SimpleNamespace
+    hist = list(game.history)
+    if hist and game.outcome not in (None, "timeout"):
+        last = hist[-1]
+        full = min(game.rules.window_sec, game.t_max - last["t"])
+        if full > last["coast_sec"]:
+            hist[-1] = dict(last, coast_sec=full)
+    snap = SimpleNamespace(rules=game.rules, initial=game.initial, history=hist)
+    rows, dense = run_gmat(game_to_script(snap, "__REPORT__", force_model, dense_path="__DENSE__"),
                            console, dense=True)
     out = analyze_dense(dense, game.rules.capture_radius_km)
     out["final_dist_km"] = float(np.linalg.norm(rows[-1, 1:4] - rows[-1, 7:10]))
