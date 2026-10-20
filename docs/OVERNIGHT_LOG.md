@@ -29,3 +29,13 @@
 - 恢復：①②③ 用原代理接續（進度在各自 worktree：① 改前基準已跑完、② rollout 躲者基準已跑完、③ 改前基準要重跑）。
   ④ 雙曲線飛掠中斷前沒有改動，worktree 已被自動清掉，等前三項有一項完成再重開。
 - 配速改成同時 2–3 個代理；長評測用 run_in_background 丟背景、等完成通知，不輪詢；brief／回報精簡。
+
+## 05:30 合併 ① 多發存活檢查（HAP-118）與 ③ 規則地圖（HAP-120）
+
+- ① `22a083f`、`74eb2e7`：`ODC_GAP_SURVIVAL` 放寬中間軌道存活檢查，**看不出增益、預設關**（E20；合計 8 vs 6 局，p=0.79）。
+- ③ `a9b209c`…`b2ba315`：`tools/rule_map.py`、`tools/rule_lookup.py`、`configs/rule_map.json`（37 格）、`game/rule_presets.py`。
+  250 m/s 級規則下窗口、T_max、一回合發數、燃料比都能翻盤（E21）；手冊第三、六節已改。
+- 驗證順序（註明）：這兩項是**先快轉合併、後在 master 驗證**——子任務各自在 worktree 跑過 pytest（85、88 項），
+  合併後主 checkout 再跑：pytest 97 項全綠；逐位元基準（default／ranking_like／ranking_like_2burn 各 36 局）與合併前 `80dc622` 完全相同。
+  之後各項改成先在分支 worktree 跑 pytest（＋逐位元）全綠，再快轉 master。
+- 也寫了第一版 `docs/OVERNIGHT_SUMMARY.md`（暫定）。

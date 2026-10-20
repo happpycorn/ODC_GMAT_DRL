@@ -40,12 +40,15 @@
 ```bash
 # 1. 填規則（照 game/rules.py 的欄位名）
 cp configs/rules_template.json configs/rules_final.json   # 然後編輯
-# 2. 平衡評估：這個規則下誰有利、哪個大腦最好（約 5 分鐘，12 核）
-uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --games 30 \
-    --pursuers "lambert_pursuer;{\"name\":\"lambert_pursuer\",\"time_weight_mps\":60};sb3:models/pursuer.zip" \
-    --evaders "coast;dv_evader;minimax_evader_fast;sb3:models/evader.zip" --name final_rules
-# 3. 看 reports/final_rules.md：兩個角色各選勝率最高的大腦，寫在白板上
+# 2. 先查表（幾秒）：最接近的格子、預期勝率、建議大腦、哪些欄位超出地圖範圍（E21，250 m/s 級 + 對稱 1500/3000 共 37 格）
+uv run python tools/rule_lookup.py configs/rules_final.json
+# 3. 再在正式規則上實跑確認（約 10–20 分鐘，5 worker；多發規則更久）
+uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --games 24 --workers 5 \
+    --pursuers "rollout_pursuer;lambert_pursuer" --evaders "rollout_evader;dv_evader;escape_evader" --name final_rules
+# 4. 看 reports/final_rules.md：兩個角色各選勝率最高的大腦，寫在白板上
 ```
+
+- 查表工具說「超出地圖範圍」的欄位（例如重力 J4、燃料發數超過測過的範圍），就以第 3 步實跑為準。
 
 - 如果初始軌道也公布了：`--scenario` 換成對應家族，或直接用 `copilot.py drill` 以正式軌道演練一場。
 - **追者勝率 < 20% 的規則**（雙方對稱、躲者油多）：抽到追者時目標改成「最小化最近距離」（若計分看距離）；抽到躲者就穩穩打燃料消耗戰。
@@ -100,7 +103,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 - **雙方單發上限都大（≥ ~1000 m/s）且燃料對稱時：考慮開局連推兩發高能量逃逸**（徑向+沿軌道推滿，copilot 的 `escape_evader` 大腦）。實測對稱規則 1500/3000 下存活 88%（rollout 躲者 72%），但單發上限小或燃料不對稱時會輸——看 copilot 推演裡它對 `rollout_pursuer` 對手模型的結果再決定。
 - **規則若照排位賽（單發 250 m/s、總 3 km/s）：不要逃逸。** 實測 rollout 追者 20/20、48 局中 94% 抓到逃逸躲者；這組規則下 rollout 躲者最強（存活約 60–70%）。`adaptive_evader` 在這組規則下會觸發逃逸，**不要用**。規則集已備好：`configs/rulesets/ranking_like.json`（docs/EXPERIMENTS.md E14、E15）。
 - **追者對手模型**：規則像排位賽（單發小、燃料對稱）時，copilot 推演表裡的「強化版 rollout 追者」（對手模型多一個 rollout 躲者）對最強躲者 29% → 71%（E16）；大推力對稱規則下它略弱。照 ★ 推薦選就好，兩者都在表上。
-- **一回合能多發時，追者大優勢**：rollout 追者對 rollout 躲者從 29% 升到 75–83%（窗口內對手不動，第二發等於完美資訊的中途修正；E17）。抽到躲者就以拖延、逼對方耗油為主。
+- **一回合能多發時，追者大優勢**：rollout 追者對 rollout 躲者從 29% 升到 75–83%（窗口內對手不動，第二發等於完美資訊的中途修正；E17）。抽到躲者就以拖延、逼對方耗油為主。copilot 的多發計畫每一發都要求推完的軌道撐到比賽結束，**不會**用初賽官方範例那種「中間軌道近地點在地表下、下一發救回」的招；放寬這個檢查實測沒有增益（E20），不要手動硬改。
 - **燃料多、單發上限小的時候：每回合小推、持續閃避**，比囤積燃料做一大發有效得多（平衡地圖：躲者 150 m/s × 3000 m/s 時解析追者只贏 8%）。追者一次重算就能追上一大發機動，但每回合都要為小閃避重新攔截。
 
 **查表（reports/balance_*.md，解析大腦 LambertPursuer vs DvEvader，mixed 幾何）**
@@ -117,6 +120,22 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 | 捕獲只看回合結束（endpoint） | 躲者略有利 | −5～−9 個百分點 |
 
 → **第一眼只看雙方總燃料比**。追者燃料不到躲者 2 倍時，抽到追者要以「最小化最近距離 / 逼對手耗油」為次目標（若計分有看）；rollout 大腦比表中解析大腦強約 +20–35 個百分點。
+
+**查表（250 m/s 級規則，rollout 追者 vs rollout 躲者，E21；`tools/rule_lookup.py` 會自動找最接近的格子）**
+
+基底 = 排位賽數字（雙方單發 250、燃料 3000、窗口 300 s、半徑 5 km、T_max 4 週期、1 發/回合）：追者 29%。
+
+| 規則特徵（其餘同基底） | 追者勝率 | 誰有利 |
+|---|---|---|
+| 一回合 2–3 發 | 75–83% | 追者 |
+| 窗口 120 s | 83% | 追者 |
+| 窗口 600–900 s | 0% | 躲者（壓倒性；對稱 1500/3000 下也是 8–21%） |
+| T_max 2 週期 / 6 週期 | 0% / 71% | 短 → 躲者、長 → 追者 |
+| 躲者燃料 ≥ 追者 1.5 倍（1500/3000、3000/4500） | 0% | 躲者（一回合多發時回到 33–54%） |
+| 追者燃料 2 倍（3000/1500） | 100% | 追者 |
+| 捕獲半徑 1–20 km、先手、endpoint 判定、單發 150/250 不對稱 | 21–42% | 跟基底分不出來 |
+
+→ **250 m/s 級規則下，除了燃料比，再看窗口長度、T_max、一回合幾發**——這三個都能把勝負整個翻過來。躲者一律用 rollout 躲者（逃逸在任何一格都沒有比較好）；追者 rollout 與 Lambert 只有窗口很短（120 s）時 rollout 明顯較好。每格 24 局（區間約 ±20 個百分點）。
 
 ---
 
