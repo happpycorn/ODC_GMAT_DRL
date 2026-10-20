@@ -10,7 +10,9 @@
 * LazyEvader —— 平常不推；只有「我這回合滑行完，追者下一回合一發就能在窗口內（含一點寬限）抓到」
   或「我這個窗口內就會被抓」時才閃，閃法 = DvEvader。省油、讓追者先出手。
 * LazyEvader2 —— LazyEvader 補上窗口邊界的盲點（純滑行交會落在追者窗口最開始幾秒時看不到），
-  閃避時優先選推完就沒有這種威脅的候選。**建議用這個。**
+  閃避時優先選推完就沒有這種威脅的候選。
+* LazyEvader3 —— LazyEvader2 + 嚴格的存活檢查（strict_survives：近地點在地底下的軌跡，還沒到近地點就先撞地，
+  orbit_survives 會漏判；對稱規則下大推力閃避在比賽尾聲踩過）。**建議用這個。**
 * ReserveRolloutEvader —— RolloutPlanner（躲者）：推演的續行換成 LazyEvader、勝局分數改成燃料戰
   餘裕（自己剩油多、追者用油多、未來最近距離大），候選多 DvEvader 解的縮小版（0.5×、0.25×）。
   對手模型維持預設 Lambert 系（E19：換更強的對手模型反而變差）。
@@ -19,12 +21,15 @@ import math
 
 import numpy as np
 
-from agents.analytic import DvEvader, need_horizon, orbit_survives, pursuer_need, rescue_burn
+from agents.analytic import (SAFETY_MARGIN_KM, DvEvader, need_horizon, orbit_survives, pursuer_need,
+                             rescue_burn)
 from agents.base import rsw_to_eci_dv
 from agents.rollout import RolloutPlanner, _pool, _worker_agent, outcome_score
 from game.core import take_turn
 from physics.coast import closest_approach
+from physics.core_math import check_constraints
 from physics.intercept import min_intercept
+from physics.propagator import propagate
 
 
 def inwindow_need(game, slack_sec=60.0, n_tof=12):
@@ -116,6 +121,9 @@ class LazyEvader2(LazyEvader):
         super().__init__(**kw)
         self.name = "lazy_evader2"
 
+    def _survives(self, game, side, dv):
+        return orbit_survives(game, side, dv)
+
     def _post_threat(self, g):
         """g = 我這回合推完（或不推）滑完窗口、追者回合開始的狀態。"""
         if g.done:
@@ -134,7 +142,7 @@ class LazyEvader2(LazyEvader):
         return False
 
     def threatened(self, game, side="evader"):
-        if not orbit_survives(game, side, np.zeros(3)):
+        if not self._survives(game, side, np.zeros(3)):
             return True
         g = game.clone()
         g.history = []
@@ -146,12 +154,12 @@ class LazyEvader2(LazyEvader):
         cap = game.burn_cap(side)
         if cap <= 0.0 or not self.threatened(game, side):
             return np.zeros(3)
-        doomed = not orbit_survives(game, side, np.zeros(3))
+        doomed = not self._survives(game, side, np.zeros(3))
         best = (-math.inf, np.zeros(3))
         cands = [np.zeros(3)] + [d * m * cap for d in self.dirs for m in self.mags]
         for k, dv_rsw in enumerate(cands):
             dv = rsw_to_eci_dv(game, side, dv_rsw)
-            if (k > 0 or doomed) and not orbit_survives(game, side, dv):
+            if (k > 0 or doomed) and not self._survives(game, side, dv):
                 continue
             g = game.clone()
             g.history = []
@@ -165,6 +173,39 @@ class LazyEvader2(LazyEvader):
             rb = rescue_burn(game, side)
             return rb if rb is not None else np.zeros(3)
         return best[1]
+
+
+def strict_survives(game, side, dv_eci_mps, margin_km=SAFETY_MARGIN_KM, floor_km=10.0, step_sec=60.0):
+    """比 orbit_survives 嚴：近地點低於「撞地高度 + margin」時不看「二體近地點時刻在不在比賽結束後」，而是實際
+    （J2）推到比賽結束 + 300 s，任何取樣點低於撞地半徑 + floor_km 就算不安全。
+
+    orbit_survives 對「近地點在地底下」的軌跡會漏判：還沒到近地點就先撞地（對稱規則 seed 1 第 3 局：剩 1,350 s 時
+    往下 + 往後推 1500 m/s，近地點在地表下 2,000 km、近地點時刻在比賽結束後，783 s 後撞地）。"""
+    r = game.r(side)
+    v = game.v(side) + np.asarray(dv_eci_mps, dtype=np.float64) / 1000.0
+    if check_constraints(r, v, game.mu, game.crash_radius + margin_km):
+        return True
+    lim = game.crash_radius + floor_km
+    t_end, t = game.time_left + 300.0, 0.0
+    while t < t_end:
+        dt = min(step_sec, t_end - t)
+        r, v = propagate(game.mu, r, v, dt, game.rules.gravity_degree)
+        t += dt
+        if float(np.linalg.norm(r)) < lim:
+            return False
+    return True
+
+
+class LazyEvader3(LazyEvader2):
+    """LazyEvader2 + 嚴格的存活檢查（strict_survives）：閃避候選與「不推會不會撞地」都用實際推進判斷。"""
+    name = "lazy_evader3"
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.name = "lazy_evader3"
+
+    def _survives(self, game, side, dv):
+        return strict_survives(game, side, dv)
 
 
 # ------------------------------------------------------------------ 推演：燃料戰餘裕分數

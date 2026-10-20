@@ -70,6 +70,26 @@ def test_lazy_evader2_sees_boundary_collision():
     assert h.outcome != "capture"
 
 
+def test_strict_survives_catches_crash_before_perigee():
+    """近地點在地底下、二體近地點時刻在比賽結束後 → orbit_survives 說安全，但還沒到近地點就撞地。"""
+    from agents.analytic import orbit_survives
+    from agents.base import rsw_to_eci_dv
+    from agents.evader_lab import strict_survives
+    sym = Rules(t_max_sec=1650.0)                      # 1500/3000
+    e600 = {"sma": 6978.0, "ecc": 0.0, "inc": 51.6, "raan": 10.0, "aop": 0.0, "ta": 20.0}
+    g = Game.from_elements(sym, NEAR_P, e600)
+    g.play_turn(np.zeros(3))                           # 追者回合；輪到躲者，剩 1350 s
+    dv = rsw_to_eci_dv(g, "evader", np.array([-1061.0, -1061.0, 0.0]))
+    assert orbit_survives(g, "evader", dv)             # 舊檢查的漏判
+    assert not strict_survives(g, "evader", dv)
+    assert strict_survives(g, "evader", np.zeros(3))
+    h = g.clone()
+    h.play_turn(dv)
+    while not h.done:
+        h.play_turn(np.zeros(3))
+    assert h.outcome == "crash_evader"
+
+
 def test_fuelwar_score_prefers_win_fuel_and_margin():
     g = Game.from_elements(RANKING, NEAR_P, FAR_E)
     win = g.clone()
