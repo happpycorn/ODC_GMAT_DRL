@@ -49,3 +49,4 @@
 - 整合：REGISTRY 加短名稱 `lazy_evader`、copilot 躲者第一大腦換成它（追者側推演對手模型**沒加**：所有追者都打不贏它，加了會讓「先比最壞」的排序退化）。
   pytest 104 項全綠；逐位元（default、ranking_like 各 36 局）與 `80dc622` 相同；copilot advise 實測 ★ = lazy_evader（4/4 對手模型贏，30.8 s／4 worker）。
 - 文件：E22、手冊躲者主力打法與追者警訊、ROADMAP；暫定總結已更新。新開第 10 項「追者反制受威脅才閃的躲者」。
+- 06:20 全攝動 GMAT 彩排（lazy_evader 當我方躲者、照 ★ 下、對 rollout 追者、ranking_like、ranking_full）：撐到時限獲勝，GMAT 真實最近 8.876 km，決策平均 13.2 s／最長 30.6 s（`reports/e22_rehearsal_full_lazy_evader_vs_rollout.md`）。

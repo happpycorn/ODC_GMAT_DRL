@@ -436,6 +436,7 @@ Exploitability（我方勝率）：
 - **主 session 壓力測試**（seed 4、每格 12 局、Lambert 與 rollout 追者，都是追者占優的格子）：躲者先手、3 發、窗口 120 s、T_max 6 週期、躲者燃料 1500（追者 3000）——LazyEvader3 **每格 100% 存活**（rollout_evader 17–83%）；對稱 1500/3000 + 2 發：100% / 83%（rollout_evader 83% / 42%）。全部格子合計逐局「只新存活」57 局 vs「只舊存活」1 局。
 - **成立性檢查**：(a) 不是捕獲取樣漏洞——最驚險的 3 局用 1 s＋局部 0.01 s 密集重算最近距離，跟引擎連續偵測差 ≤ 1 m（最近 6.46 km）；(b) 只用輪到它時的公開狀態（雙方位置速度、規則、時間；對手燃料看不到時用「單發上限 × 發數」估，更保守）；躲者先手也成立；(c) 省油不是靠 T_max 短換來的：T_max 6 週期時仍 100% 存活、只用 717–871 m/s。量身反制追者（rollout 追者、對手模型＝新躲者）也是 0/24、0/12。
 - **燃料**：一局 375–1150 m/s（排位版各格），rollout_evader 2,240–2,900 m/s。最近距離中位數 12–98 km（比 rollout_evader 近，邊際較薄）。
+- **全攝動 GMAT 彩排**（`reports/e22_rehearsal_full_lazy_evader_vs_rollout.md`；ranking_like、near_coplanar seed 0、`--force-model ranking_full`，我方躲者每回合照 copilot ★，★ 每回合都選 lazy_evader；對手 rollout 追者）：撐到時限（勝），GMAT 真實最近 **8.876 km**（引擎 8.87 km）、全程沒進捕獲球；匯入差最大 17.5 m；決策平均 13.2 s、最長 30.6 s（4 worker）。同一幾何 E18 的 rollout 躲者最近 60.5 km——lazy_evader 讓追者靠得比較近，邊際只剩幾公里。
 - **結論**：**躲者主力改用 lazy_evader**（copilot 躲者大腦第一順位）。機制：回合交替時躲者總在追者窗口前最後出手，只要每次都把追者「一個窗口內收得掉」的可能性擋掉，同時不浪費燃料，追者就沒有機會。
 - **反面警訊**：如果對手的躲者這樣打，**我們現有的追者大腦全部只抓得到 0–4%**——研究「怎麼抓住受威脅才閃的躲者」列為新項目。
 - **附帶發現（未修）**：`agents/analytic.py` 的 `orbit_survives` 對「近地點在地表下、但二體近地點時刻在比賽結束後」的軌跡會判安全，實際上還沒到近地點就先撞地；DvEvader、LambertPursuer、EscapeEvader、`rescue_burn` 都用它。修正會改變預設行為（只影響近地點低於門檻的軌道），留給使用者決定。
