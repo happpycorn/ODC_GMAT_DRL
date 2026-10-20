@@ -41,6 +41,15 @@ def _sc_block(name, r, v):
     return "\n".join(lines)
 
 
+def _burns(rec):
+    """回合紀錄裡的各發（一回合多發，HAP-107）；舊格式紀錄只有一發。"""
+    return rec.get("burns") or [{"t": rec["t"], "dv_eci_mps": rec["dv_eci_mps"], "dv_mps": rec["dv_mps"]}]
+
+
+def _burn_name(k, j):
+    return f"B{k}" if j == 0 else f"B{k}_{j}"
+
+
 def game_to_script(game, report_path):
     """把 Game（含 history）轉成 GMAT 腳本字串。"""
     R = game.rules
@@ -81,15 +90,17 @@ Prop.StopIfAccuracyIsViolated = true;
 """,
     ]
     for k, rec in enumerate(game.history):
-        dv = np.asarray(rec["dv_eci_mps"]) / 1000.0
-        parts.append(f"""Create ImpulsiveBurn B{k};
-B{k}.CoordinateSystem = EarthMJ2000Eq;
-B{k}.Element1 = {dv[0]:.15f};
-B{k}.Element2 = {dv[1]:.15f};
-B{k}.Element3 = {dv[2]:.15f};
-B{k}.DecrementMass = false;
-B{k}.Isp = 300;
-B{k}.GravitationalAccel = 9.81;""")
+        for j, b in enumerate(_burns(rec)):
+            dv = np.asarray(b["dv_eci_mps"]) / 1000.0
+            name = _burn_name(k, j)
+            parts.append(f"""Create ImpulsiveBurn {name};
+{name}.CoordinateSystem = EarthMJ2000Eq;
+{name}.Element1 = {dv[0]:.15f};
+{name}.Element2 = {dv[1]:.15f};
+{name}.Element3 = {dv[2]:.15f};
+{name}.DecrementMass = false;
+{name}.Isp = 300;
+{name}.GravitationalAccel = 9.81;""")
     parts.append(f"""
 Create ReportFile Rep;
 Rep.Filename = '{report_path}';
@@ -102,12 +113,17 @@ Report Rep {rep_cols};""")
     for k, rec in enumerate(game.history):
         ship = "ShipP" if rec["side"] == "pursuer" else "ShipE"
         seq = []
-        if rec["dv_mps"] > 0.0:
-            seq.append(f"Maneuver B{k}({ship});")
-        if rec["coast_sec"] > 0.0:
-            # ⚠️ 停止條件的 ElapsedSecs 是「從這個 Propagate 指令開始」算的（報表裡的
-            # ElapsedSecs 才是從初始 epoch 起算）——所以這裡要給窗口長度，不是累積時間
-            seq.append(f"Propagate Synchronized Prop(ShipP, ShipE) {{ShipP.ElapsedSecs = {rec['coast_sec']:.9f}}};")
+        bs = _burns(rec)
+        for j, b in enumerate(bs):
+            if b["dv_mps"] > 0.0:
+                seq.append(f"Maneuver {_burn_name(k, j)}({ship});")
+            # 這一發到下一發（或窗口結束）的滑行；單發時就是整個窗口
+            end = (bs[j + 1]["t"] - rec["t"]) if j + 1 < len(bs) else rec["coast_sec"]
+            seg = end - (b["t"] - rec["t"])
+            if seg > 0.0:
+                # ⚠️ 停止條件的 ElapsedSecs 是「從這個 Propagate 指令開始」算的（報表裡的
+                # ElapsedSecs 才是從初始 epoch 起算）——所以這裡要給這段的長度，不是累積時間
+                seq.append(f"Propagate Synchronized Prop(ShipP, ShipE) {{ShipP.ElapsedSecs = {seg:.9f}}};")
         seq.append(f"Report Rep {rep_cols};")
         parts.append("\n".join(seq))
     script = "\n".join(parts) + "\n"
@@ -161,28 +177,34 @@ def verify_game(game, console=GMAT_CONSOLE):
 
 def main():
     from agents import make_agent
-    from game.core import Game
+    from game.core import Game, take_turn
     from game.rules import RuleRanges, Rules
     from game.scenarios import sample_scenario
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--pursuer", default="lambert_pursuer")
     ap.add_argument("--evader", default="dv_evader")
-    ap.add_argument("--rules", default="default", help="default / ranges")
+    ap.add_argument("--rules", default="default", help="default / ranges / 規則 JSON 檔")
     ap.add_argument("--scenario", default="near_coplanar")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--gravity-degree", type=int, default=None)
     args = ap.parse_args()
 
     rng = np.random.default_rng(args.seed)
-    R = RuleRanges().sample(rng) if args.rules == "ranges" else Rules()
+    if args.rules == "ranges":
+        R = RuleRanges().sample(rng)
+    elif args.rules == "default":
+        R = Rules()
+    else:
+        import json
+        R = Rules.from_dict(json.load(open(args.rules)))
     if args.gravity_degree is not None:
         R = R.with_(gravity_degree=args.gravity_degree)
     sc = sample_scenario(rng, args.scenario)
     g = Game.from_elements(R, sc.orbit_pursuer, sc.orbit_evader)
     P, E = make_agent(args.pursuer), make_agent(args.evader)
     while not g.done:
-        g.play_turn((P if g.mover == "pursuer" else E).act(g, g.mover))
+        take_turn(g, P if g.mover == "pursuer" else E)
     print("game:", g.summary())
     out = verify_game(g)
     for p in out["per_turn"]:

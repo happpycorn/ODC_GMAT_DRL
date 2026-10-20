@@ -4,6 +4,11 @@
 T_max）→ 換另一方。滑行期間用 `physics.coast.coast_pair` 連續偵測捕獲 / 撞地，事件
 發生就停在那個時刻結束比賽。
 
+一回合多發（HAP-107，`Rules.burns_per_turn > 1`）：mover 可在同一窗口內、間隔至少
+`min_burn_gap_sec` 下多發。`play_plan` 吃（窗口內偏移秒數, Δv）清單；`take_turn` 讓 agent
+在窗口內依序決定每一發（窗口內對手不動，所以在副本上推進到下一發的時刻再問 agent
+即可，任何單發 agent 都能直接用）。`burns_per_turn=1` 時 `play_turn` 的運算與舊版逐位元相同。
+
 勝負（官方）：追者在時間+燃料內靠近到捕獲半徑 → 追者勝；躲者撐到 T_max → 躲者勝。
 撞地（軌跡低於 crash_altitude）→ 撞的那方輸（佔位判定，待 HAP-50）。
 
@@ -53,6 +58,9 @@ class Game:
         self.min_dist = self.distance()
         self.initial = {s: (self._r[s].copy(), self._v[s].copy()) for s in SIDES}
         self.history = []
+        self._win_len = None        # 進行中窗口的長度；None = 不在窗口中途（下一發是回合的第一發）
+        self._win_elapsed = 0.0
+        self._pending = None        # 進行中窗口的回合紀錄
         if self.min_dist <= rules.capture_radius_km:
             self.outcome = "capture"
 
@@ -88,6 +96,8 @@ class Game:
         g._v = {s: a.copy() for s, a in self._v.items()}
         g.used = dict(self.used)
         g.history = list(self.history)
+        if self._pending is not None:
+            g._pending = {**self._pending, "burns": list(self._pending["burns"])}
         return g
 
     # ------------------------------------------------------------------ 查詢
@@ -129,7 +139,14 @@ class Game:
         return orbital_period(a, self.mu) if math.isfinite(a) else 6000.0
 
     def next_window(self) -> float:
-        return min(self.rules.window_sec, self.time_left)
+        """這一發之後最多還能滑行多久：回合開始時是整個窗口，窗口中途是窗口剩下的部分。"""
+        if self._win_len is None:
+            return min(self.rules.window_sec, self.time_left)
+        return max(0.0, self._win_len - self._win_elapsed)
+
+    @property
+    def mid_window(self) -> bool:
+        return self._win_len is not None
 
     # ------------------------------------------------------------------ 推進
     def clip_dv(self, side, dv_eci_mps) -> np.ndarray:
@@ -143,31 +160,50 @@ class Game:
         return dv
 
     def play_turn(self, dv_eci_mps) -> dict:
-        """輪到的一方施加脈衝（自動裁到合法）並滑行一個窗口。回傳這個 turn 的紀錄。"""
+        """輪到的一方施加脈衝（自動裁到合法）並滑行一個窗口。回傳這個 turn 的紀錄。
+
+        窗口中途（多發）呼叫時，這一發之後滑完窗口剩下的部分並結束回合。"""
+        return self.sub_burn(dv_eci_mps, math.inf)
+
+    def sub_burn(self, dv_eci_mps, coast_sec):
+        """輪到的一方推一發，雙方滑行 min(coast_sec, 窗口剩餘)。窗口滑完（或比賽結束）時結束
+        回合、換手並回傳回合紀錄；否則回傳 None（仍在同一窗口，可再推下一發）。"""
         if self.done:
             raise RuntimeError("比賽已結束")
         side = self.mover
+        if self._win_len is None:
+            self._win_len = min(self.rules.window_sec, self.time_left)
+            self._win_elapsed = 0.0
+            self._pending = {"turn": self.turn, "side": side, "t": self.t, "burns": [],
+                             "window_min_dist_km": math.inf, "t_window_min": self.t}
+        P = self._pending
         dv = self.clip_dv(side, dv_eci_mps)
         mag = float(np.linalg.norm(dv))
         r_b, v_b = self._r[side].copy(), self._v[side].copy()
         dv_rsw = rsw_basis(r_b, v_b) @ dv
         self._v[side] = self._v[side] + dv / 1000.0
         self.used[side] += mag
+        P["burns"].append({"t": self.t, "dv_eci_mps": dv, "dv_rsw_mps": dv_rsw, "dv_mps": mag,
+                           "r_before": r_b, "v_before": v_b})
 
-        dt = self.next_window()
+        dt = min(coast_sec, self._win_len - self._win_elapsed)
         R = self.rules
         continuous = R.capture_mode == "continuous"
         rp, vp, re, ve, t_el, ev, dmin, t_dmin = coast_pair(
             self._r["pursuer"], self._v["pursuer"], self._r["evader"], self._v["evader"],
             dt, R.substep_sec, self.mu, R.gravity_degree, R.capture_radius_km if continuous else -1.0,
             self.crash_radius)
-        if not continuous and ev == EV_NONE and float(np.linalg.norm(rp - re)) <= R.capture_radius_km:
+        self._win_elapsed += float(t_el)
+        window_over = self._win_elapsed >= self._win_len - 1e-9
+        if not continuous and window_over and ev == EV_NONE and float(np.linalg.norm(rp - re)) <= R.capture_radius_km:
             ev = EV_CAPTURE                      # endpoint 模式：只看回合結束瞬間
         self._r["pursuer"], self._v["pursuer"] = rp, vp
         self._r["evader"], self._v["evader"] = re, ve
         t0 = self.t
         self.t += float(t_el)
         self.min_dist = min(self.min_dist, float(dmin))
+        if float(dmin) < P["window_min_dist_km"]:
+            P["window_min_dist_km"], P["t_window_min"] = float(dmin), t0 + float(t_dmin)
 
         if ev == EV_CAPTURE:
             self.outcome = "capture"
@@ -177,17 +213,63 @@ class Game:
             self.outcome = "crash_evader"
         elif self.t >= self.t_max - 1e-6:
             self.outcome = "timeout"
+        if not (window_over or self.done):
+            return None
 
+        first = P["burns"][0]
         rec = {
-            "turn": self.turn, "side": side, "t": t0, "dv_eci_mps": dv, "dv_rsw_mps": dv_rsw,
-            "dv_mps": mag, "r_before": r_b, "v_before": v_b, "coast_sec": float(t_el),
-            "window_min_dist_km": float(dmin), "t_window_min": t0 + float(t_dmin),
+            "turn": P["turn"], "side": side, "t": P["t"], "dv_eci_mps": first["dv_eci_mps"],
+            "dv_rsw_mps": first["dv_rsw_mps"],
+            "dv_mps": first["dv_mps"] if len(P["burns"]) == 1 else float(sum(b["dv_mps"] for b in P["burns"])),
+            "r_before": first["r_before"], "v_before": first["v_before"], "coast_sec": self._win_elapsed,
+            "window_min_dist_km": P["window_min_dist_km"], "t_window_min": P["t_window_min"],
             "distance_after_km": self.distance(), "outcome": self.outcome,
             "rp_after": rp.copy(), "vp_after": vp.copy(), "re_after": re.copy(), "ve_after": ve.copy(),
+            "burns": P["burns"],
         }
         self.history.append(rec)
         self.turn += 1
         self.mover = other(side)
+        self._win_len, self._win_elapsed, self._pending = None, 0.0, None
+        return rec
+
+    def _window_used(self):
+        """進行中窗口已下的（非零）發：回傳 (窗口內已過秒數, 已下發數, 最後一發的偏移或 None)。"""
+        if self._win_len is None:
+            return 0.0, 0, None
+        offs = [b["t"] - self._pending["t"] for b in self._pending["burns"] if b["dv_mps"] > 0.0]
+        return self._win_elapsed, len(offs), (offs[-1] if offs else None)
+
+    def play_plan(self, burns) -> dict:
+        """下完這個回合（剩下的部分）：burns = [(窗口內偏移秒數, ECI Δv m/s), ...]，偏移從窗口開始算。
+
+        不合法的發會被丟掉：偏移不在「現在～窗口結束」之間、跟前一發間隔 < min_burn_gap_sec、
+        超過 burns_per_turn 發（含這個窗口已經下的）。零向量不算一發。回傳回合紀錄。"""
+        if self.done:
+            raise RuntimeError("比賽已結束")
+        R = self.rules
+        start, n_used, prev = self._window_used()
+        win = self._win_len if self._win_len is not None else self.next_window()
+        plan = sorted(((float(o), np.asarray(d, dtype=np.float64).reshape(3)) for o, d in burns),
+                      key=lambda x: x[0])
+        kept = []
+        for o, d in plan:
+            if n_used + len(kept) >= R.burns_per_turn:
+                break
+            if not (start - 1e-6 <= o < win) or not np.any(d):
+                continue
+            last = kept[-1][0] if kept else prev
+            if last is not None and o - last < R.min_burn_gap_sec - 1e-6:
+                continue
+            kept.append((max(o, start), d))
+        if not kept or kept[0][0] > start:
+            kept.insert(0, (start, np.zeros(3)))   # 第一發之前先滑行（零向量不算一發）
+        rec = None
+        for i, (o, d) in enumerate(kept):
+            nxt = kept[i + 1][0] if i + 1 < len(kept) else math.inf
+            rec = self.sub_burn(d, nxt - o)
+            if rec is not None:
+                break
         return rec
 
     def summary(self) -> dict:
@@ -196,3 +278,43 @@ class Game:
             "turns": self.turn, "min_dist_km": self.min_dist, "final_dist_km": self.distance(),
             "used_pursuer_mps": self.used["pursuer"], "used_evader_mps": self.used["evader"],
         }
+
+
+def plan_turn(game, agent, first_dv=None):
+    """問 agent 這個回合（剩下的部分）要怎麼推，回傳 play_plan 吃的 [(偏移秒數, Δv)]，不改動 game。
+
+    burns_per_turn=1：只問一次（first_dv 給定就直接用它）。多發：在副本上推這一發、滑行
+    min_burn_gap_sec 後再問 agent 下一發——窗口內對手不動，所以副本的未來就是真實的未來。
+    可以從窗口中途開始（rollout 推演候選時會這樣用）。"""
+    side = game.mover
+    R = game.rules
+    if R.burns_per_turn <= 1:
+        return [(0.0, agent.act(game, side) if first_dv is None else first_dv)]
+    sim = game.clone()
+    sim.history = []
+    off, n_used, prev = sim._window_used()
+    win = sim._win_len if sim.mid_window else sim.next_window()
+    if prev is not None and off - prev < R.min_burn_gap_sec - 1e-6:      # 離上一發太近：先等
+        wait = prev + R.min_burn_gap_sec - off
+        if off + wait >= win - 1e-9 or sim.sub_burn(np.zeros(3), wait) is not None:
+            return []
+        first_dv = None                       # 原本想現在推的那發已經不合法
+    burns = []
+    for i in range(R.burns_per_turn - n_used):
+        off = sim._win_elapsed if sim.mid_window else 0.0
+        dv = sim.clip_dv(side, first_dv if (i == 0 and first_dv is not None) else agent.act(sim, side))
+        if np.any(dv):
+            burns.append((off, dv))
+        if i == R.burns_per_turn - n_used - 1 or off + R.min_burn_gap_sec >= win - 1e-9:
+            break
+        if sim.sub_burn(dv, R.min_burn_gap_sec) is not None:   # 比賽在這段滑行中結束
+            break
+    return burns
+
+
+def take_turn(game, agent, first_dv=None) -> dict:
+    """輪到的一方交給 agent 下完這個回合（可能多發）。burns_per_turn=1 時就是
+    game.play_turn(agent.act(game, mover))（或 first_dv）。"""
+    if game.rules.burns_per_turn <= 1:
+        return game.play_turn(agent.act(game, game.mover) if first_dv is None else first_dv)
+    return game.play_plan(plan_turn(game, agent, first_dv))

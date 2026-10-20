@@ -49,7 +49,7 @@ def gmat_report_now(game, workdir):
 def main():
     import copilot
     from agents import make_agent
-    from game.core import Game
+    from game.core import Game, plan_turn
     from game.rules import RuleRanges, Rules
     from game.scenarios import sample_scenario
 
@@ -105,13 +105,16 @@ def main():
                 if out.get("ranking"):
                     top = out["ranking"][0]["brain"]
                     pick = next(a for a in out["advice"] if a["brain"] == top)
-                dv = np.asarray(pick["burn"]["eci_mps"])
+                plan = [(p["offset_sec"], np.asarray(p["eci_mps"])) for p in pick["plan"]]
                 who = f"我方 {pick['brain']}"
             else:
-                dv = truth.clip_dv(opp_side, opp.act(truth, opp_side))
+                if R.burns_per_turn <= 1:
+                    plan = [(0.0, truth.clip_dv(opp_side, opp.act(truth, opp_side)))]
+                else:
+                    plan = plan_turn(truth, opp)
                 who = f"對手 {opp.name}"
             t_decide = time.perf_counter() - t1
-            rec = g.play_turn(dv)
+            rec = g.play_turn(plan[0][1]) if R.burns_per_turn <= 1 else g.play_plan(plan)
             log.append({"turn": rec["turn"], "side": rec["side"], "who": who, "dv_mps": rec["dv_mps"],
                         "gmat_sec": t_gmat, "decide_sec": t_decide, "import_vs_engine_m": 1000 * d_import,
                         "distance_km": rec["distance_after_km"], "outcome": rec["outcome"]})

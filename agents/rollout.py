@@ -18,6 +18,7 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 
 from agents.base import Agent, rsw_to_eci_dv
+from game.core import take_turn
 
 DEFAULTS = {
     "pursuer": dict(
@@ -47,10 +48,9 @@ def play_out(game, dv, side, cont, opp):
     opp.reset(seed=0)
     h = game.clone()
     h.history = []
-    h.play_turn(dv)
+    take_turn(h, cont, first_dv=dv)          # 多發規則下，這個窗口剩下的發交給 cont
     while not h.done:
-        a = cont if h.mover == side else opp
-        h.play_turn(a.act(h, h.mover))
+        take_turn(h, cont if h.mover == side else opp)
     return outcome_score(h, side)
 
 

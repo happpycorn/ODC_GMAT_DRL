@@ -13,7 +13,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from game.core import Game
+from game.core import Game, take_turn
 from game.rules import RuleRanges, Rules
 from game.scenarios import sample_scenario
 
@@ -78,10 +78,9 @@ def play(task: Task) -> dict:
         side = g.mover
         agent = P if side == "pursuer" else E
         t0 = time.perf_counter()
-        dv = agent.act(g, side)
+        take_turn(g, agent)                  # 一回合多發時會多次問 agent（HAP-107）
         t_act[side] += time.perf_counter() - t0
         n_act[side] += 1
-        g.play_turn(dv)
     s = g.summary()
     s.update({
         "pursuer": spec_name(task.pursuer), "evader": spec_name(task.evader), "family": task.family,

@@ -32,7 +32,7 @@ import numpy as np
 
 from agents import make_agent
 from agents.analytic import need_horizon, orbit_survives, pursuer_need
-from game.core import Game
+from game.core import Game, plan_turn, take_turn
 from game.rules import Rules, other
 from game.scenarios import DEFAULT_ORBIT_EVADER, DEFAULT_ORBIT_PURSUER, sample_scenario
 from physics import EARTH_MU, RE_VAL, get_r0_v0
@@ -121,20 +121,39 @@ def situation(g):
     }
 
 
-def rollout(g, side, first_dv, my_agent, opp_agent):
-    """我方先推 first_dv，之後我方交給 my_agent、對手交給 opp_agent 下到比賽結束。"""
+def rollout(g, side, plan, my_agent, opp_agent):
+    """我方先照 plan（[(偏移秒數, Δv)]）下完這回合，之後我方交給 my_agent、對手交給 opp_agent 下到比賽結束。"""
     h = g.clone()
-    h.play_turn(first_dv)
+    if h.rules.burns_per_turn <= 1:
+        h.play_turn(plan[0][1])
+    else:
+        h.play_plan(plan)
     while not h.done:
-        a = my_agent if h.mover == side else opp_agent
-        h.play_turn(a.act(h, h.mover))
+        take_turn(h, my_agent if h.mover == side else opp_agent)
     s = h.summary()
     s["we_win"] = h.winner == side
     return s
 
 
 def burn_formats(g, side, dv_eci_mps):
-    r, v = g.r(side), g.v(side)
+    return burn_formats_rv(g.r(side), g.v(side), dv_eci_mps)
+
+
+def plan_formats(g, side, plan):
+    """多發計畫的每一發（偏移秒數 + 各座標系 Δv）；VNB/RSW 用推那一刻的軌道狀態換算。"""
+    if len(plan) == 1 and plan[0][0] == 0.0:
+        return [{"offset_sec": 0.0, **burn_formats(g, side, plan[0][1])}]
+    h = g.clone()
+    h.history = []
+    rec = h.play_plan(plan) if plan else None
+    out = []
+    for b in (rec["burns"] if rec else []):
+        if b["dv_mps"] > 0.0:
+            out.append({"offset_sec": b["t"] - rec["t"], **burn_formats_rv(b["r_before"], b["v_before"], b["dv_eci_mps"])})
+    return out
+
+
+def burn_formats_rv(r, v, dv_eci_mps):
     return {
         "eci_mps": np.asarray(dv_eci_mps).round(4).tolist(),
         "eci_kms (EarthMJ2000Eq, like official Burn Table)": (np.asarray(dv_eci_mps) / 1000).round(7).tolist(),
@@ -166,13 +185,19 @@ def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
     for b in brains:
         agent = make_agent(b)
         t0 = time.perf_counter()
-        dv = g.clip_dv(side, agent.act(g, side))
+        if g.rules.burns_per_turn <= 1:
+            dv = g.clip_dv(side, agent.act(g, side))
+            plan = [(0.0, dv)]
+        else:                                     # 一回合多發（HAP-107）：整個窗口的計畫
+            plan = plan_turn(g, agent)
+            dv = plan[0][1] if plan and plan[0][0] == 0.0 else np.zeros(3)
         entry = {"brain": b, "decide_sec": time.perf_counter() - t0, "burn": burn_formats(g, side, dv),
+                 "plan": plan_formats(g, side, plan),
                  "safe_after_burn": orbit_survives(g, side, dv), "rollouts": []}
         if rollouts:
             for name, oa in opps:
                 oa.reset(seed=0)
-                entry["rollouts"].append({"opponent": name, **rollout(g, side, dv, agent, oa)})
+                entry["rollouts"].append({"opponent": name, **rollout(g, side, plan, agent, oa)})
         out["advice"].append(entry)
     if rollouts and out["advice"]:
         out["ranking"] = rank_advice(out["advice"], side)
@@ -224,6 +249,12 @@ def print_advice(out, side):
         print(f"  ECI  km/s : {b['eci_kms (EarthMJ2000Eq, like official Burn Table)']}")
         print(f"  VNB  km/s : {b['vnb_kms (GMAT ImpulsiveBurn Axes=VNB)']}")
         print(f"  RSW  m/s  : {b['rsw_mps (radial, along-track, cross-track)']}")
+        if len(a.get("plan", [])) > 1 or (a.get("plan") and a["plan"][0]["offset_sec"] > 0.0):
+            print(f"  多發計畫（{len(a['plan'])} 發，總 {sum(p['magnitude_mps'] for p in a['plan']):.1f} m/s）：")
+            for p in a["plan"]:
+                print(f"    +{p['offset_sec']:6.1f}s  |Δv|={p['magnitude_mps']:7.2f}  "
+                      f"ECI km/s {p['eci_kms (EarthMJ2000Eq, like official Burn Table)']}  "
+                      f"VNB km/s {p['vnb_kms (GMAT ImpulsiveBurn Axes=VNB)']}")
         for r in a["rollouts"]:
             print(f"    vs {str(r['opponent']):<40} → {r['outcome']:<14} {'WIN ' if r['we_win'] else 'LOSE'} "
                   f"t={r['t_end']:.0f}s  最近 {r['min_dist_km']:.1f} km  燃料用 P {r['used_pursuer_mps']:.0f} / E {r['used_evader_mps']:.0f}")
@@ -233,6 +264,13 @@ def print_advice(out, side):
         for i, row in enumerate(out["ranking"]):
             mark = "★ 推薦" if i == 0 else "      "
             print(f"  {mark} {str(row['brain']):<50} 贏 {row['wins']}/{row['n']} 個對手模型")
+
+
+def _play_advice(g, entry):
+    """照某個大腦的建議下完這個回合（單發用 burn、多發用 plan）。"""
+    if g.rules.burns_per_turn <= 1:
+        return g.play_turn(np.asarray(entry["burn"]["eci_mps"]))
+    return g.play_plan([(p["offset_sec"], np.asarray(p["eci_mps"])) for p in entry["plan"]])
 
 
 def _parse_specs(s):
@@ -321,8 +359,7 @@ def main(argv=None):
                          g.r("evader"), g.v("evader"))
             fresh.mover = st["role"]
             fresh.used = dict(g.used)
-            dv = np.asarray(out["advice"][0]["burn"]["eci_mps"])
-            fresh.play_turn(dv)
+            _play_advice(fresh, out["advice"][0])
             with open(args.gmat, "w") as f:
                 f.write(game_to_script(fresh, os.path.abspath(os.path.splitext(args.gmat)[0] + "_report.txt")))
             print(f"→ GMAT 腳本 {args.gmat}（施加建議脈衝並滑行 {fresh.history[0]['coast_sec']:.0f}s）")
@@ -348,7 +385,7 @@ def main(argv=None):
         brains = _parse_specs(args.brains) or DEFAULT_BRAINS[side]
         while not g.done:
             if g.mover != side:
-                g.play_turn(opp.act(g, g.mover))
+                take_turn(g, opp)
                 continue
             st = state_from_game(g, side)
             out = advise(st, brains, None, not args.no_rollout)
@@ -364,7 +401,7 @@ def main(argv=None):
                     g.play_turn(np.array([float(x) for x in parts]))
                     continue
                 k = int(ans or 0)
-            g.play_turn(np.asarray(out["advice"][k]["burn"]["eci_mps"]))
+            _play_advice(g, out["advice"][k])
         print("=" * 78)
         print("比賽結束：", g.summary(), "我方", "勝" if g.winner == side else "敗")
         return 0

@@ -32,12 +32,16 @@ class Rules:
     crash_altitude_km: float = 100.0     # 軌跡低於此高度 = 撞地/再入（佔位，同 Planner MIN_PERIAPSIS）
     substep_sec: float = 60.0            # 窗口內事件偵測的分段長度（數值參數，不是規則）
     capture_mode: str = "continuous"     # "continuous"：任何時刻進捕獲球就算；"endpoint"：只看每回合結束瞬間
+    burns_per_turn: int = 1              # 一個回合（窗口）內輪到的一方最多下幾發（HAP-107）
+    min_burn_gap_sec: float = 100.0      # 同一窗口內兩發的最小間隔（照排位賽規則；只在 burns_per_turn > 1 時有作用）
 
     def __post_init__(self):
         if self.first_mover not in SIDES:
             raise ValueError(f"first_mover 必須是 {SIDES}，收到 {self.first_mover!r}")
         if self.capture_mode not in ("continuous", "endpoint"):
             raise ValueError(f"capture_mode 必須是 continuous / endpoint，收到 {self.capture_mode!r}")
+        if self.burns_per_turn < 1:
+            raise ValueError("burns_per_turn 至少 1")
         if self.window_sec <= 0:
             raise ValueError("window_sec 必須 > 0")
 
