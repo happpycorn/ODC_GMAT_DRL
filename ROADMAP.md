@@ -32,6 +32,7 @@
 - [x] copilot `import` 讀 GMAT 報表、rollout 平行化（HAP-109）
 - [x] Exploitability：rollout 大腦被針對時多弱（HAP-108）
 - [x] 排位賽版規則集（250/3000 對稱）小批評測：開局逃逸翻盤成最弱、rollout 躲者最強（E14）
-- [ ] 排位賽版規則下用 `copilot.py drill` / 彩排確認 ★ 推薦不會選逃逸（E14 結論 4）
+- [x] 排位賽版規則下用 `copilot.py drill` 確認 ★ 推薦不會選逃逸大腦（E14b：0/39 回合；但會分批往逃逸方向推）
+- [ ] 排位賽版規則下的 GMAT 彩排（`tools/dress_rehearsal.py`，最好搭配全攝動）
 - [ ] 規則公告後：在正式規則上重跑 E7/E11/E12 的關鍵對打（大腦選擇可能隨規則翻轉，例如逃逸躲者）
 - [ ] 規則公告（HAP-50）→ `configs/rules_final.json` → 重跑評測/平衡 → 微調 RL → 凍結 `models/`

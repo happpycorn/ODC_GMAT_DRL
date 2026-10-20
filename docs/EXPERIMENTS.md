@@ -258,3 +258,21 @@
   4. **對 copilot 的影響**：E13 躲者彩排的 ★ 推薦是開局逃逸（1500 m/s 規則）。排位版規則下照理推演排序會自己避開逃逸，但**還沒用 drill/彩排實測**。
 - **附帶發現**：對稱規則下 rollout 追者對 escape_evader 這次是 50%，E12 是 19%（16 局、不同幾何批次）。兩次的 95% 區間有重疊（約 7–43% 對 30–70%），差距可能只是幾何批次不同；引用這類數字要附上局數 n 和區間。
 - **限制**：20 局/配對（區間 ±20 個百分點）、只用 J2、窗口 300 s、捕獲半徑 5 km 都是佔位；沒有測一回合多發（HAP-107）——排位賽有 100 s 機動間隔，四強賽可能允許一回合多發，這會讓小推力的劣勢縮小。
+
+### E14b 排位賽版規則下的躲者 drill：★ 推薦會不會選逃逸（2026-10-20）
+- **設定**：`copilot.py drill --role evader --opponent rollout_pursuer --scenario near_coplanar --seed 0`，大腦 `rollout_evader,dv_evader,escape_evader,sb3:models/evader.zip`（跟 E13 彩排同一組大腦、同一個幾何），對手模型用 copilot 預設。每回合照 ★ 推薦下。`ranking_like` 和 `symmetric` 各一場當對照（無 GMAT，單行程）。
+  ```bash
+  NUMBA_NUM_THREADS=1 uv run python copilot.py drill --role evader --opponent rollout_pursuer --rules configs/rulesets/{ranking_like,symmetric}.json \
+      --scenario near_coplanar --seed 0 --brains "rollout_evader,dv_evader,escape_evader,sb3:models/evader.zip"
+  ```
+
+| 規則 | 結局 | 最近距離 | 躲者實際推的次數 / 用油 | 39 個我方回合的 ★ |
+|---|---|---|---|---|
+| symmetric（1500/3000） | 撐到時限（勝） | 26.9 km | 2 發 / 3000 m/s | 第 1 回合 `escape_evader`、第 3 回合 RL 躲者（同為 1500 m/s 逃逸），其餘 rollout |
+| **ranking_like（250/3000）** | 撐到時限（勝） | 60.5 km | 11 發 / 2651 m/s | rollout 37、dv_evader 1、RL 1，**`escape_evader` 0 次** |
+
+- **對照組重現 E13**：對稱規則下 ★ 一開局就選逃逸，跟 GMAT 彩排一致。
+- **排位版規則下 ★ 從沒選 `escape_evader` 大腦**：它的推演幾乎每回合都輸給 3 個追者模型（Lambert、Lambert w=60、rollout）。
+- **但要注意，最後的打法裡仍有逃逸方向的推力**：rollout 躲者 11 發裡有 5 發的方向跟逃逸大腦一樣（RSW 徑向 + 沿軌道各 177 m/s，cos = 1.00），其餘是純徑向或純沿軌道。差別在**時機**：中間夾著不推的回合，大約 3 小時把油分批用完，不是每回合連續推滿。所以結論是「不要用連續推滿的逃逸**大腦**」，不是「不要往逃逸方向推」。
+- **前半場比對稱規則危險**：t ≤ 6900 s 的 9 個回合，★ 推薦只贏 1–3 個對手模型（大多輸給 Lambert 系追者模型，實際對手 rollout 追者反而推演會贏），要到 t ≥ 8700 s 才每回合 4/4 全贏。對稱規則下逃逸推完後每回合都是 4/4。
+- **限制**：只有一場、一個幾何；對手是 rollout 追者；沒有經過 GMAT。
