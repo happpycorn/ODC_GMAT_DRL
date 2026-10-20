@@ -37,6 +37,39 @@ def test_lazy_evader_coasts_when_safe_and_dodges_when_threatened():
     assert 0.0 < np.linalg.norm(dv) <= 250.0 + 1e-6
 
 
+def _boundary_collision_game(t_hit=306.0):
+    """躲者回合開始；雙方都滑行的話，在 t_hit 秒（追者窗口開始後幾秒）以 ~7 km/s 相撞（交叉軌道）。"""
+    from physics.propagator import propagate
+    g0 = Game.from_elements(RANKING, NEAR_P, FAR_E)
+    re, ve = g0.r("evader"), g0.v("evader")
+    r_hit, v_hit = propagate(g0.mu, re, ve, t_hit, 2)
+    # 速度繞徑向轉 60°（Rodrigues）：同速率、不同軌道面 → 交叉軌道
+    u = r_hit / np.linalg.norm(r_hit)
+    th = np.radians(60.0)
+    vp_hit = v_hit * np.cos(th) + np.cross(u, v_hit) * np.sin(th) + u * (u @ v_hit) * (1 - np.cos(th))
+    rb, vb = propagate(g0.mu, r_hit, -vp_hit, t_hit, 2)        # 保守力場可逆：反向速度往前推 = 往回推
+    return Game.from_snapshot(RANKING, rb, -vb, re, ve, t=0.0, t_max=3600.0, mover="evader")
+
+
+def test_lazy_evader2_sees_boundary_collision():
+    from agents.evader_lab import LazyEvader2
+    g = _boundary_collision_game()
+    assert g.distance() > 1000.0
+    h = g.clone()
+    h.play_turn(np.zeros(3))
+    h.play_turn(np.zeros(3))
+    assert h.outcome == "capture"                  # 都不推 → 追者窗口一開始就相撞
+    assert not LazyEvader().threatened(g)          # 舊版的盲點
+    lazy2 = LazyEvader2()
+    assert lazy2.threatened(g)
+    dv = lazy2.act(g, "evader")
+    assert np.linalg.norm(dv) > 0.0
+    h = g.clone()
+    h.play_turn(dv)
+    h.play_turn(np.zeros(3))
+    assert h.outcome != "capture"
+
+
 def test_fuelwar_score_prefers_win_fuel_and_margin():
     g = Game.from_elements(RANKING, NEAR_P, FAR_E)
     win = g.clone()

@@ -9,6 +9,8 @@
 
 * LazyEvader —— 平常不推；只有「我這回合滑行完，追者下一回合一發就能在窗口內（含一點寬限）抓到」
   或「我這個窗口內就會被抓」時才閃，閃法 = DvEvader。省油、讓追者先出手。
+* LazyEvader2 —— LazyEvader 補上窗口邊界的盲點（純滑行交會落在追者窗口最開始幾秒時看不到），
+  閃避時優先選推完就沒有這種威脅的候選。**建議用這個。**
 * ReserveRolloutEvader —— RolloutPlanner（躲者）：推演的續行換成 LazyEvader、勝局分數改成燃料戰
   餘裕（自己剩油多、追者用油多、未來最近距離大），候選多 DvEvader 解的縮小版（0.5×、0.25×）。
   對手模型維持預設 Lambert 系（E19：換更強的對手模型反而變差）。
@@ -17,9 +19,11 @@ import math
 
 import numpy as np
 
-from agents.analytic import DvEvader, need_horizon, orbit_survives, pursuer_need
+from agents.analytic import DvEvader, need_horizon, orbit_survives, pursuer_need, rescue_burn
+from agents.base import rsw_to_eci_dv
 from agents.rollout import RolloutPlanner, _pool, _worker_agent, outcome_score
 from game.core import take_turn
+from physics.coast import closest_approach
 from physics.intercept import min_intercept
 
 
@@ -83,6 +87,84 @@ class LazyEvader(DvEvader):
         if game.burn_cap(side) <= 0.0 or not self.threatened(game, side):
             return np.zeros(3)
         return super().act(game, side)
+
+
+def coast_threat(game, cap_mps, margin_mps=40.0, slack_sec=60.0, substep=20.0):
+    """game = 追者回合開始的狀態。雙方都滑行時，追者窗口（+slack）內的最近接近 d（時刻 t）若
+    ≤ 捕獲半徑 + (cap+margin)·t，追者這回合推一發（甚至不推）就能進捕獲球。補 inwindow_need 的盲點：
+    交會時間很短（< 10 s，或捕獲半徑相對 TOF 很大）時，「精確攔截所需 Δv」會嚴重高估。"""
+    R = game.rules
+    H = min(game.next_window() + slack_sec, game.time_left)
+    if H <= 0.0:
+        return False
+    d, t, _ = closest_approach(game.r("pursuer"), game.v("pursuer"), game.r("evader"), game.v("evader"),
+                               H, substep, game.mu, R.gravity_degree)
+    reach = (cap_mps + margin_mps) if cap_mps > 0.0 else 0.0
+    return d <= R.capture_radius_km + reach * t / 1000.0
+
+
+class LazyEvader2(LazyEvader):
+    """LazyEvader + 補窗口邊界的盲點。
+
+    診斷（seed 1 第 21 局，反制追者 = rollout 追者、對手模型 LazyEvader）：雙方純滑行、相對速度 ~6.5 km/s，
+    交會落在追者窗口開始後 6 s。LazyEvader 的窗口內 Lambert 掃描從 TOF 10 s 起、DvEvader 的評分從 TOF 60 s
+    起，都看不到 → 一滴油都沒用就被抓。修正：(1) 威脅多一條 coast_threat；(2) 閃避時推完仍有
+    coast_threat 的候選重罰（優先選推完就安全的），其餘照 DvEvader 評分。"""
+    name = "lazy_evader2"
+
+    def __init__(self, **kw):
+        super().__init__(**kw)
+        self.name = "lazy_evader2"
+
+    def _post_threat(self, g):
+        """g = 我這回合推完（或不推）滑完窗口、追者回合開始的狀態。"""
+        if g.done:
+            return g.winner == "pursuer"
+        cap = pursuer_reach_cap(g)
+        if coast_threat(g, cap, self.margin_mps, self.slack_sec):
+            return True
+        if cap <= 0.0:
+            return False
+        if inwindow_need(g, self.slack_sec) <= cap + self.margin_mps:
+            return True
+        if self.need_gate_mps > 0.0:
+            need, _ = pursuer_need(g, horizon=need_horizon(g, self.horizon_windows), max_revs=self.max_revs,
+                                   pts_per_period=16, n_refine=1)
+            return need < self.need_gate_mps
+        return False
+
+    def threatened(self, game, side="evader"):
+        if not orbit_survives(game, side, np.zeros(3)):
+            return True
+        g = game.clone()
+        g.history = []
+        g.play_turn(np.zeros(3))
+        return self._post_threat(g)
+
+    def act(self, game, side):
+        assert side == "evader"
+        cap = game.burn_cap(side)
+        if cap <= 0.0 or not self.threatened(game, side):
+            return np.zeros(3)
+        doomed = not orbit_survives(game, side, np.zeros(3))
+        best = (-math.inf, np.zeros(3))
+        cands = [np.zeros(3)] + [d * m * cap for d in self.dirs for m in self.mags]
+        for k, dv_rsw in enumerate(cands):
+            dv = rsw_to_eci_dv(game, side, dv_rsw)
+            if (k > 0 or doomed) and not orbit_survives(game, side, dv):
+                continue
+            g = game.clone()
+            g.history = []
+            g.play_turn(dv)
+            s = self._score(g, float(np.linalg.norm(dv_rsw)))
+            if not g.done and coast_threat(g, pursuer_reach_cap(g), self.margin_mps, self.slack_sec):
+                s -= 1e7
+            if s > best[0]:
+                best = (s, dv)
+        if best[0] == -math.inf and doomed:
+            rb = rescue_burn(game, side)
+            return rb if rb is not None else np.zeros(3)
+        return best[1]
 
 
 # ------------------------------------------------------------------ 推演：燃料戰餘裕分數
