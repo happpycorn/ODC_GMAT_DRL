@@ -139,9 +139,13 @@ def cell_block(i, d, c, R):
              f"   rollout 追 vs rollout 躲：{_rate(P.get('rr'))}",
              f"   強化版追 vs rollout 躲：{_rate(P.get('strong'))}",
              f"   rollout 追 vs 逃逸躲：  {_rate(P.get('escape'))}"]
-    cp = c.get("pursuer_compare")
-    if cp:
-        lines.append(f"   追者大腦（同局配對）：強化版獨贏 {cp['only_strong']}、rollout 獨贏 {cp['only_rollout']}，p={cp['p']:.2g}")
+    if P.get("lambert"):
+        lines.append(f"   Lambert 追 vs rollout 躲：{_rate(P.get('lambert'))}")
+    for key, name in (("pursuer_compare", "strong"), ("lambert_compare", "lambert")):
+        cp = c.get(key)
+        if cp:
+            lines.append(f"   追者大腦（同局配對）：{name} 獨贏 {cp[f'only_{name}']}、rollout 獨贏 {cp['only_rollout']}，"
+                         f"p={cp['p']:.2g}")
     if a.get("as_pursuer"):
         lines.append(f"   抽到追者：{a['as_pursuer']}")
     if a.get("as_evader"):

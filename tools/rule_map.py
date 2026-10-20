@@ -53,9 +53,13 @@ PAIRS = {
     "rr": ("rollout_pursuer", "rollout_evader"),
     "strong": (STRONG_ROLLOUT_PURSUER, "rollout_evader"),
     "escape": ("rollout_pursuer", "escape_evader"),
+    "lambert": ("lambert_pursuer", "rollout_evader"),
 }
 PAIR_SETS = {"core": ["rr", "strong", "escape"], "fast": ["rr", "escape"]}
-PAIR_LABEL = {"rr": "rollout 追 vs rollout 躲", "strong": "強化版追 vs rollout 躲", "escape": "rollout 追 vs 逃逸躲"}
+PAIR_LABEL = {"rr": "rollout 追 vs rollout 躲", "strong": "強化版追 vs rollout 躲", "escape": "rollout 追 vs 逃逸躲",
+              "lambert": "Lambert 追 vs rollout 躲（對照：Lambert 追者不會「判斷全輸就不追」）"}
+PURSUER_KEYS = ["rr", "strong", "lambert"]          # 都是對 rollout 躲者
+BRAIN_LABEL = {"rr": "預設 rollout 追者", "strong": "強化版 rollout 追者", "lambert": "Lambert 追者"}
 
 # 排位版基底（250/3000）的掃描計畫；每個 dict 是相對基底的改動（跟基底相同的欄位會自動省略）
 GROUPS = {
@@ -76,7 +80,9 @@ GROUPS = {
                      {"burns_per_turn": 3, "fuel_pursuer_mps": 1500.0},
                      {"burns_per_turn": 3, "fuel_evader_mps": 4500.0}],
     "burns_x_window": [{"burns_per_turn": 2, "window_sec": 120.0},
+                       {"burns_per_turn": 2, "window_sec": 600.0},
                        {"burns_per_turn": 2, "window_sec": 900.0},
+                       {"burns_per_turn": 3, "window_sec": 600.0},
                        {"burns_per_turn": 3, "window_sec": 900.0}],
 }
 RANGES_STREAM = 9          # --ranges 的規則亂數流 = default_rng([seed, game_id, 9])
@@ -301,30 +307,33 @@ def pair_stats(rs, base_rs=None):
     return st
 
 
-def advise(S, cmp_p, cmp_e):
-    rr, st = S.get("rr"), S.get("strong")
+def advise(S, cmps, cmp_e):
+    """cmps：{"strong": rr vs strong 配對, "lambert": rr vs lambert 配對}；cmp_e：rr vs escape（躲者存活）。"""
     out = {}
-    better = None
-    if cmp_p and cmp_p["p"] < SIG:
-        better = "strong" if cmp_p["only_strong"] > cmp_p["only_rollout"] else "rollout"
-    out["pursuer_brain"] = better or "n.s."
-    cands = [x for x in (("rollout", rr), ("strong", st)) if x[1]]
+    cands = [k for k in PURSUER_KEYS if k in S]
     if not cands:
         return out
-    bname, best = max(cands, key=lambda x: x[1]["rate"])
+    best_k = max(cands, key=lambda k: (S[k]["rate"], -PURSUER_KEYS.index(k)))
+    sig = {k: c for k, c in cmps.items() if c and c["p"] < SIG}
+    if best_k != "rr" and best_k in sig and sig[best_k][f"only_{best_k}"] > sig[best_k]["only_rollout"]:
+        c = sig[best_k]
+        out["pursuer_brain"] = best_k
+        brain = f"用{BRAIN_LABEL[best_k]}（顯著優於 rollout：+{c[f'only_{best_k}']}/−{c['only_rollout']} p={c['p']:.2g}）"
+    elif best_k == "rr" and any(c[f"only_{k}"] < c["only_rollout"] for k, c in sig.items()):
+        out["pursuer_brain"] = "rr"
+        worse = "、".join(BRAIN_LABEL[k] for k, c in sig.items() if c[f"only_{k}"] < c["only_rollout"])
+        brain = f"用預設 rollout 追者（顯著優於{worse}）"
+    else:
+        out["pursuer_brain"] = "n.s."
+        brain = (f"{BRAIN_LABEL[best_k]}點估計最高，但跟其他追者大腦看不出差異，照 copilot ★" if len(cands) > 1
+                 else f"用{BRAIN_LABEL[best_k]}")
+    best = S[best_k]
     lo, hi = best["ci"]
     out["favored"] = "pursuer" if lo > 0.5 else "evader" if hi < 0.5 else "even"
+    out["best_pursuer"] = best_k
     out["best_pursuer_rate"] = best["rate"]
     out["best_pursuer_ci"] = best["ci"]
     txt = {"pursuer": "追者有利", "evader": "躲者有利", "even": "看不出誰有利（區間跨 50%）"}[out["favored"]]
-    if better == "strong":
-        brain = "用強化版 rollout 追者（顯著較好）"
-    elif better == "rollout":
-        brain = "用預設 rollout 追者（顯著較好）"
-    elif cmp_p:
-        brain = f"兩個追者大腦看不出差異（p={cmp_p['p']:.2g}），照 copilot ★"
-    else:
-        brain = "用 rollout 追者"
     out["as_pursuer"] = f"{txt}；{brain}；預期勝率 {100 * best['rate']:.0f}% [{100 * lo:.0f}–{100 * hi:.0f}]（對 rollout 躲者）"
     ev = "用 rollout 躲者"
     out["evader_brain"] = "rollout"
@@ -336,7 +345,7 @@ def advise(S, cmp_p, cmp_e):
         else:
             ev += f"（逃逸看不出差異，p={cmp_e['p']:.2g}）"
     out["as_evader"] = (f"{ev}；預期存活 {100 * (1 - best['rate']):.0f}% [{100 * (1 - hi):.0f}–{100 * (1 - lo):.0f}]"
-                        f"（對我們最強的追者 {bname}）")
+                        f"（對我們最強的追者：{BRAIN_LABEL[best_k]}）")
     return out
 
 
@@ -347,10 +356,11 @@ def cell_stats(rows):
     for cid, c in cells.items():
         S = {pk: pair_stats(rs, base["pairs"].get(pk) if base and cid != "base" else None)
              for pk, rs in c["pairs"].items()}
-        cmp_p = cmp_e = None
-        if "rr" in c["pairs"] and "strong" in c["pairs"]:
-            p = paired(c["pairs"]["rr"], c["pairs"]["strong"], "pursuer")
-            cmp_p = {"n": p["n"], "only_rollout": p["only_a"], "only_strong": p["only_b"], "p": p["p_sign"]}
+        cmps, cmp_e = {}, None
+        for k in PURSUER_KEYS[1:]:
+            if "rr" in c["pairs"] and k in c["pairs"]:
+                p = paired(c["pairs"]["rr"], c["pairs"][k], "pursuer")
+                cmps[k] = {"n": p["n"], "only_rollout": p["only_a"], f"only_{k}": p["only_b"], "p": p["p_sign"]}
         if "rr" in c["pairs"] and "escape" in c["pairs"]:
             p = paired(c["pairs"]["rr"], c["pairs"]["escape"], "evader")
             cmp_e = {"n": p["n"], "only_rollout": p["only_a"], "only_escape": p["only_b"], "p": p["p_sign"]}
@@ -359,7 +369,8 @@ def cell_stats(rows):
         out.append({"family": c.get("family"), "id": cid, "axis": axis_of(c["overrides"], c["ranges"]),
                     "label": cell_label(c["overrides"], base_rules, c["ranges"]),
                     "overrides": c["overrides"], "ranges": c["ranges"], "rules": rules, "pairs": S,
-                    "pursuer_compare": cmp_p, "evader_compare": cmp_e, "advice": advise(S, cmp_p, cmp_e)})
+                    "pursuer_compare": cmps.get("strong"), "lambert_compare": cmps.get("lambert"),
+                    "evader_compare": cmp_e, "advice": advise(S, cmps, cmp_e)})
     out.sort(key=_cell_sort_key)
     return out
 
@@ -403,21 +414,23 @@ def markdown(stats, name):
               "- 配對：" + "；".join(f"{k} = {v}" for k, v in PAIR_LABEL.items()),
               f"- 格內：追者勝率 [95% Wilson 區間]。「vs 基底」= 跟基底格同一局逐局配對：+只有本格抓到 / −只有基底抓到，"
               f"p = 雙尾精確符號檢定；**粗體** = p < {SIG}（幾十個檢定裡約 5% 會是偽陽性，單一個 p≈0.03 要保守看）", "",
-              "## 追者勝率", "",
-              "| 軸 | 格子 | rr | rr vs 基底 | strong | strong vs 基底 | escape | escape vs 基底 |",
-              "|---|---|---|---|---|---|---|---|"]
+              "## 追者勝率", ""]
+    keys = [k for k in ("rr", "strong", "lambert", "escape") if any(k in c["pairs"] for c in stats)]
+    lines.append("| 軸 | 格子 | " + " | ".join(f"{k} | {k} vs 基底" for k in keys) + " |")
+    lines.append("|---|---|" + "---|---|" * len(keys))
     for c in stats:
         S = c["pairs"]
-        lines.append(f"| {c['axis']} | {c['label']} | {_rate(S.get('rr'))} | {_delta(S.get('rr'))} | "
-                     f"{_rate(S.get('strong'))} | {_delta(S.get('strong'))} | {_rate(S.get('escape'))} | "
-                     f"{_delta(S.get('escape'))} |")
+        lines.append(f"| {c['axis']} | {c['label']} | " +
+                     " | ".join(f"{_rate(S.get(k))} | {_delta(S.get(k))}" for k in keys) + " |")
     lines += ["", "## 大腦選擇與建議", "",
-              "強化 vs rollout 追者：同格同局配對（+只有強化版抓到 / −只有 rollout 抓到）；"
+              "強化/Lambert vs rollout 追者：同格同局配對（+只有該大腦抓到 / −只有 rollout 抓到）；"
               "逃逸 vs rollout 躲者：對 rollout 追者的存活（+只有逃逸活下來 / −只有 rollout 躲者活下來）。", "",
-              "| 格子 | 強化 vs rollout 追者 | 逃逸 vs rollout 躲者 | 抽到追者 | 抽到躲者 |", "|---|---|---|---|---|"]
+              "| 格子 | 強化 vs rollout 追者 | Lambert vs rollout 追者 | 逃逸 vs rollout 躲者 | 抽到追者 | 抽到躲者 |",
+              "|---|---|---|---|---|---|"]
     for c in stats:
         a = c["advice"]
         lines.append(f"| {c['label']} | {_cmp(c['pursuer_compare'], 'only_rollout', 'only_strong')} | "
+                     f"{_cmp(c.get('lambert_compare'), 'only_rollout', 'only_lambert')} | "
                      f"{_cmp(c['evader_compare'], 'only_rollout', 'only_escape')} | {a.get('as_pursuer', '—')} | "
                      f"{a.get('as_evader', '—')} |")
     lines += ["", "## 細節", "",
