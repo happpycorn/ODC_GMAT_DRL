@@ -5,8 +5,13 @@
   （receding horizon）。`time_weight_mps` 決定「早點抓到」值多少 Δv。
 * DvEvader —— 候選脈衝（RSW 方向 × 大小）逐一模擬自己這個窗口，挑讓
   「追者攔截所需 Δv − 追者剩餘燃料」最大者（燃料消耗戰，見 METHODOLOGY §5）。
+
+多發規則（burns_per_turn > 1）的「間隔存活」放寬（`gap_survival`，環境變數 ODC_GAP_SURVIVAL）：
+窗口內這一發之後還會再被問一發時，這一發推完的中間軌道不必撐到比賽結束，只要撐過間隔、
+而且間隔後還救得回來（見 next_burn_gap / gap_burn_survives；docs/notes/multi_burn_survival.md）。
 """
 import math
+import os
 from itertools import product
 
 import numpy as np
@@ -14,7 +19,7 @@ import numpy as np
 from agents.base import Agent, rsw_to_eci_dv
 from physics.coast import closest_approach
 from physics.core_math import check_constraints, reaches_perigee
-from physics.intercept import _refine_tof, intercept_scan, min_intercept, shoot_j2
+from physics.intercept import _refine_tof, best_lambert, intercept_scan, min_intercept, shoot_j2
 from physics.propagator import propagate
 
 
@@ -55,6 +60,92 @@ def rescue_burn(game, side):
     return None
 
 
+GAP_SURVIVAL_ENV = "ODC_GAP_SURVIVAL"
+GAP_SURVIVAL_DEFAULT = 0
+
+
+def gap_survival_level():
+    """ODC_GAP_SURVIVAL 開關（evaluate.py 的子行程會繼承）：0 = 嚴格（舊行為）、1 = 撐過間隔且救得回來、
+    2 = 再加上「間隔後一發補得完同一個攔截」；未設定時用 GAP_SURVIVAL_DEFAULT。"""
+    v = os.environ.get(GAP_SURVIVAL_ENV, "").strip().lower()
+    if v in ("1", "true", "on", "yes"):
+        return 1
+    if v == "2":
+        return 2
+    if v in ("0", "false", "off", "no"):
+        return 0
+    return GAP_SURVIVAL_DEFAULT
+
+
+def next_burn_gap(game, side):
+    """多發規則下，`side` 推完這一發後本窗口還會不會再被問一發：會 → 回傳間隔秒數，不會 → None。
+
+    跟 game.core.plan_turn 的問法一致：從窗口開頭每隔 min_burn_gap_sec 問一次、一個窗口最多問
+    burns_per_turn 次（推零也用掉一次），下一問的時刻要在窗口內。agent 看不到這是第幾問，所以取
+    「窗口內已過秒數 / 間隔」與「已下的非零發數」的大者保守估計（rollout 從窗口中途接手也不會高估）。"""
+    R = game.rules
+    gap = float(R.min_burn_gap_sec)
+    if R.burns_per_turn <= 1 or gap <= 0.0 or game.done or game.mover != side:
+        return None
+    off, n_used, _ = game._window_used()
+    asked = max(n_used, int(math.floor(off / gap + 1e-6)))
+    if asked + 1 >= R.burns_per_turn:
+        return None
+    win = game._win_len if game.mid_window else game.next_window()
+    if off + gap >= win - 1e-9 or gap >= game.time_left:
+        return None
+    return gap
+
+
+def gap_burn_survives(game, side, dv_eci_mps, gap, margin_km=SAFETY_MARGIN_KM, target=None, max_revs=1):
+    """窗口內 gap 秒後還能再推一發時的放寬存活條件（初賽官方範例解那招：中間軌道近地點在地表下）：
+
+    (a) 推完這發滑行 gap 秒：這段弧的最低點不低於撞地高度 + 裕度（二體精確：弧內經過近地點看
+        近地點，否則看兩端），引擎實際滑行也沒撞地；
+    (b) gap 秒後用剩下的單發上限／燃料救得回來：不推就撐到比賽結束，或 rescue_burn 找得到一發。
+    每一發都要確認 (b)，所以窗口最後一發一定有嚴格安全的退路。
+    (c) target=(目標位置, 從現在起的 TOF) 時（level 2）：gap 秒後一發（≤ 單發上限）就能補完到同一個目標、
+        而且補完的軌道過得了嚴格檢查（或就在這個窗口內抓到）——避免「推一大發、下一發只能救命」。"""
+    dv = np.array(dv_eci_mps, dtype=np.float64).reshape(3)
+    r = game.r(side)
+    v = game.v(side) + dv / 1000.0
+    r_min = game.crash_radius + margin_km
+    sim = game.clone()
+    sim.history = []
+    sim.sub_burn(dv, gap)
+    if sim.done:                                  # 間隔內捕獲 / 對手撞地 / 時間到：沒有自己撞地就行
+        return sim.outcome != f"crash_{side}"
+    if not check_constraints(r, v, game.mu, r_min):
+        if reaches_perigee(r, v, game.mu, gap):
+            return False
+        if min(float(np.linalg.norm(r)), float(np.linalg.norm(sim.r(side)))) < r_min:
+            return False
+    if target is not None and not _completable(sim, side, target[0], target[1] - gap, max_revs):
+        return False
+    if orbit_survives(sim, side, np.zeros(3)):
+        return True
+    return rescue_burn(sim, side) is not None
+
+
+def _completable(sim, side, r_target, tof_left, max_revs):
+    """sim 此刻一發（≤ 單發上限）就能在 tof_left 秒後到 r_target，且補完的軌道過得了嚴格檢查或就在窗口內抓到。"""
+    if tof_left <= 60.0:
+        return False
+    d, v1 = best_lambert(sim.mu, sim.r(side), sim.v(side), np.asarray(r_target, dtype=np.float64),
+                         float(tof_left), int(max_revs), safe_radius(sim))
+    if not math.isfinite(d) or d * 1000.0 > sim.burn_cap(side):
+        return False
+    return tof_left <= sim.next_window() or orbit_survives(sim, side, (v1 - sim.v(side)) * 1000.0)
+
+
+def _coast_wins_window(game, side):
+    """不推、滑完這個窗口剩下的部分，比賽會不會以我方勝結束（間隔放寬後的中間軌道上用）。"""
+    sim = game.clone()
+    sim.history = []
+    sim.sub_burn(np.zeros(3), math.inf)
+    return sim.winner == side
+
+
 def pursuer_need(game, horizon=None, max_revs=2, pts_per_period=24, n_refine=2, refine_iters=10,
                  max_pts=160):
     """追者此刻一發攔截（假設躲者之後純滑行）、在 horizon 秒內抓到所需的最小 Δv（m/s）與 TOF。
@@ -85,7 +176,7 @@ class LambertPursuer(Agent):
     name = "lambert_pursuer"
 
     def __init__(self, time_weight_mps=10.0, pts_per_period=24, max_revs=2, j2_shoot=True,
-                 coast_if_captures=True, max_pts=240, horizon_frac=1.0):
+                 coast_if_captures=True, max_pts=240, horizon_frac=1.0, gap_survival=None):
         self.time_weight_mps = time_weight_mps   # 每晚一個窗口抓到，願意多付多少 m/s
         self.horizon_frac = horizon_frac         # 只考慮 TOF <= 剩餘時間 × frac 的攔截（至少一個窗口）
         self.pts_per_period = pts_per_period     # TOF 網格密度跟軌道週期走（固定點數會漏極小值）
@@ -93,6 +184,9 @@ class LambertPursuer(Agent):
         self.max_revs = max_revs
         self.j2_shoot = j2_shoot
         self.coast_if_captures = coast_if_captures
+        # 多發規則：窗口內還會再推時，中間軌道只需撐過間隔且救得回來（0/1/2，見 gap_survival_level；
+        # None = 跟環境變數 ODC_GAP_SURVIVAL）
+        self.gap_survival = gap_survival_level() if gap_survival is None else int(gap_survival)
         if time_weight_mps != 10.0:
             self.name = f"lambert_pursuer(w={time_weight_mps:g})"
 
@@ -104,6 +198,7 @@ class LambertPursuer(Agent):
             return np.zeros(3)
         rp, vp, re, ve = game.r("pursuer"), game.v("pursuer"), game.r("evader"), game.v("evader")
         mu, gd = game.mu, R.gravity_degree
+        relax = self.gap_survival > 0 and R.burns_per_turn > 1
 
         # 已經在滑行中會進捕獲球（這個窗口內）→ 不動，省油
         if self.coast_if_captures:
@@ -113,7 +208,9 @@ class LambertPursuer(Agent):
                 d_ca = float(np.linalg.norm(rp_w - re_w))
             else:
                 d_ca, _, _ = closest_approach(rp, vp, re, ve, game.next_window(), 60.0, mu, gd)
-            if d_ca <= 0.8 * R.capture_radius_km:
+            # 放寬時可能正在一條撐不久的中間軌道上：要確定滑完窗口真的先抓到、不是先撞地
+            if d_ca <= 0.8 * R.capture_radius_km and \
+                    (not relax or orbit_survives(game, side, np.zeros(3)) or _coast_wins_window(game, side)):
                 return np.zeros(3)
 
         horizon = game.time_left
@@ -176,18 +273,32 @@ class LambertPursuer(Agent):
         # 完整解且在這個窗口內抓到 → 躲者來不及反應，弧已檢查過安全，直接推。
         # 其他情況（部分推力、或躲者還有機會閃開）推完的軌道必須撐到比賽結束：
         # 不行就減半重試；連不推都會再入的話改做救命推力。
+        # 間隔放寬（多發、窗口內還會再被問）：撐過間隔且之後救得回來也算過（救命推力仍是嚴格的）。
+        gap = next_burn_gap(game, side) if relax else None
+        if gap is None:
+            survives = orbit_survives
+        else:
+            target = []                           # level 2：第二發要補得完同一個攔截（目標位置用到才算）
+
+            def survives(g, s, d):
+                if orbit_survives(g, s, d):
+                    return True
+                if self.gap_survival >= 2 and not target:
+                    target.append((propagate(mu, re, ve, tof, gd)[0], tof))
+                return gap_burn_survives(g, s, d, gap, target=target[0] if target else None,
+                                         max_revs=self.max_revs)
         if full and tof <= game.next_window():
             # 只有「真的會命中」才免檢查：J2 打靶沒收斂時 Lambert 二體解會偏幾公里，
             # 沒抓到就會留在一條可能撞地的轉移軌道上（copilot 演練抓到過）
             rp_t, _ = propagate(mu, rp, vp + dv / 1000.0, tof, gd)
             re_t, _ = propagate(mu, re, ve, tof, gd)
-            if np.linalg.norm(rp_t - re_t) <= 0.5 * R.capture_radius_km or orbit_survives(game, side, dv):
+            if np.linalg.norm(rp_t - re_t) <= 0.5 * R.capture_radius_km or survives(game, side, dv):
                 return dv
-        if orbit_survives(game, side, dv):
+        if survives(game, side, dv):
             return dv
         for _ in range(8):
             dv *= 0.5
-            if orbit_survives(game, side, dv):
+            if survives(game, side, dv):
                 return dv
         rb = rescue_burn(game, side)
         return rb if rb is not None else np.zeros(3)
