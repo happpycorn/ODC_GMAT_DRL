@@ -61,6 +61,8 @@ def rescue_burn(game, side):
 
 
 GAP_SURVIVAL_ENV = "ODC_GAP_SURVIVAL"
+# 預設關（docs/notes/multi_burn_survival.md）：250 m/s 多發幾乎不觸發；1500 m/s 多發常觸發但追者沒變強
+# （放寬的一發之後多半只能救命），level 1 還會在 rollout 規劃器全輸、選零候選時讓追者停在撞地軌道上。
 GAP_SURVIVAL_DEFAULT = 0
 
 
