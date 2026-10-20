@@ -16,3 +16,9 @@
   - 第一批（平行）：① 多發時放寬存活檢查（追者）② 躲者改進 ③ 規則敏感度地圖（250 m/s 級）
   - 之後依檔案不重疊排：④ 雙曲線／飛掠幾何 ⑤ copilot 整體策略評測與決策時間 ⑥ 全攝動彩排擴大
     ⑦ 對手風格辨識 ⑧ 排位版規則重訓 RL（sp4）⑨ 各項結論在另一組規則上再驗
+
+## 22:20 第一批子任務開跑
+
+- Linear：母卡 HAP-117；① HAP-118、② HAP-119、③ HAP-120（皆 In Progress）。
+- 三個子任務各在自己的 worktree（`.claude/worktrees/agent-*`）。注意：worktree 預設從舊的 `origin/main`（6 月）開，brief 第 0 步改成先 `git merge --ff-only master`。
+- master 逐位元基準（`80dc622`，主 checkout）：預設規則、ranking_like、ranking_like_2burn 各 6 局 × 6 配對，之後合併改到 agents/ 的分支時在同一 checkout 前後比對。
