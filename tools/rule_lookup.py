@@ -113,7 +113,7 @@ def out_of_range(R, doc):
 
 def _rate(st):
     if not st:
-        return "—"
+        return "未跑"
     lo, hi = st["ci"]
     s = f"{100 * st['rate']:.0f}% [{100 * lo:.0f}–{100 * hi:.0f}] n={st['n']}"
     v = st.get("vs_base")
