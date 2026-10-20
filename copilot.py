@@ -51,9 +51,10 @@ STRONG_ROLLOUT_PURSUER = {"name": "rollout_pursuer",
                           "_table_cont": "rollout_pursuer"}
 DEFAULT_BRAINS = {"pursuer": ["rollout_pursuer", "lambert_pursuer",
                               {"name": "lambert_pursuer", "time_weight_mps": 60.0}, STRONG_ROLLOUT_PURSUER],
+                  # lazy_evader（受威脅才閃，E22）：排位版與對稱規則下對我們所有追者都最強、每步 ~ms、省油；
                   # escape_evader 只當參考：燃料與單發上限都大且對稱時實測最強（88% vs 72%），
                   # 但隨機規則下會輸 rollout（HAP-108，docs/EXPERIMENTS.md E12）
-                  "evader": ["rollout_evader", "dv_evader", "escape_evader"]}
+                  "evader": ["lazy_evader", "rollout_evader", "dv_evader", "escape_evader"]}
 # 推演用的對手模型。躲者側加 rollout 追者：只用 Lambert 系模型時推演會過度樂觀（HAP-108 教訓）
 DEFAULT_OPP_MODELS = {"pursuer": ["coast", "dv_evader_fast", "dv_evader", "escape_evader"],
                       "evader": ["coast", "lambert_pursuer", {"name": "lambert_pursuer", "time_weight_mps": 60.0},

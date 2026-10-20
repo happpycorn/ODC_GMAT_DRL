@@ -29,7 +29,14 @@ REGISTRY = {
     "rollout_pursuer": lambda **kw: _rollout("pursuer", **kw),
     "rollout_evader": lambda **kw: _rollout("evader", **kw),
     "adaptive_evader": lambda **kw: _adaptive(**kw),
+    # 受威脅才閃（E22）：平常不推，追者下一回合窗口內攔得到才用 DvEvader 的閃法；排位版規則下對我們所有追者都存活
+    "lazy_evader": lambda **kw: _lazy(**kw),
 }
+
+
+def _lazy(**kw):
+    from agents.evader_lab import LazyEvader3
+    return LazyEvader3(**kw)
 
 
 def _adaptive(**kw):

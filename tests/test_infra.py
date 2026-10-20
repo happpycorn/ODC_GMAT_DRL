@@ -32,3 +32,8 @@ def test_paired_counts():
     assert p["rate_a"] == 0.5 and p["p_sign"] == 1.0
     q = paired(a, b, win="evader")
     assert (q["both"], q["only_a"], q["only_b"]) == (1, 1, 1)
+
+
+def test_lazy_evader_registered():
+    from agents.evader_lab import LazyEvader3
+    assert isinstance(make_agent("lazy_evader"), LazyEvader3)

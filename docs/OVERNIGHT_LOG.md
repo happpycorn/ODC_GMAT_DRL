@@ -39,3 +39,13 @@
   合併後主 checkout 再跑：pytest 97 項全綠；逐位元基準（default／ranking_like／ranking_like_2burn 各 36 局）與合併前 `80dc622` 完全相同。
   之後各項改成先在分支 worktree 跑 pytest（＋逐位元）全綠，再快轉 master。
 - 也寫了第一版 `docs/OVERNIGHT_SUMMARY.md`（暫定）。
+
+## 05:50 合併 ② 躲者改進（HAP-119）：受威脅才閃的 lazy_evader
+
+- 子任務 commit `7f605f2`、`4f31eea`、`c530df4`（只新增 `agents/evader_lab.py` 等檔案）；合併前在它的 worktree rebase 到 master 後跑 pytest：103 項全綠。
+- 主 session 獨立驗證：seed 3（12 局）LazyEvader3 對 Lambert／rollout／強化版 rollout 追者 36/36 存活（rollout_evader 67%／58%／25%）；
+  壓力測試 seed 4、追者占優的 6 種規則格子（躲者先手、3 發、120 s 窗口、T_max 6 週期、躲者燃料一半、對稱 + 2 發）合計逐局「只新存活」57 vs「只舊」1；
+  密集重算 3 局最近距離與引擎差 ≤ 1 m（不是取樣漏洞）；只用公開資訊；省油不是靠 T_max 短。
+- 整合：REGISTRY 加短名稱 `lazy_evader`、copilot 躲者第一大腦換成它（追者側推演對手模型**沒加**：所有追者都打不贏它，加了會讓「先比最壞」的排序退化）。
+  pytest 104 項全綠；逐位元（default、ranking_like 各 36 局）與 `80dc622` 相同；copilot advise 實測 ★ = lazy_evader（4/4 對手模型贏，30.8 s／4 worker）。
+- 文件：E22、手冊躲者主力打法與追者警訊、ROADMAP；暫定總結已更新。新開第 10 項「追者反制受威脅才閃的躲者」。
