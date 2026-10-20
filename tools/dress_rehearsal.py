@@ -10,6 +10,10 @@
 驗的是：匯入沒抄錯（GMAT 狀態 vs 引擎狀態差距）、每回合決策耗時、整條流程能不能在時限內跑完、
 勝負判定在 GMAT 真實軌跡下是否一致。
 
+`--force-model ranking_full`：GMAT 用排位賽官方全攝動模型當真實世界（引擎只有 J2–J4）。這時
+每回合開始會把帳本（引擎）狀態重設成 GMAT 的狀態（--resync，ranking_full 預設開），窗口內的
+捕獲仍由引擎偵測；賽後再用 GMAT 密集報表重算真實最近距離與捕獲時刻，兩邊的勝負判定並列。
+
 例：
     uv run python tools/dress_rehearsal.py --role evader --opponent rollout_pursuer --max-turns 12
     uv run python tools/dress_rehearsal.py --role pursuer --opponent dv_evader --no-rollout
@@ -31,11 +35,19 @@ HEADER = ("ShipP.ElapsedSecs ShipP.EarthMJ2000Eq.X ShipP.EarthMJ2000Eq.Y ShipP.E
           "ShipE.EarthMJ2000Eq.VX ShipE.EarthMJ2000Eq.VY ShipE.EarthMJ2000Eq.VZ")
 
 
-def gmat_report_now(game, workdir):
+def write_report(workdir, n, t, state):
+    path = os.path.join(workdir, f"gmat_turn{n:03d}.txt")
+    last = np.concatenate([[t], *state["pursuer"], *state["evader"]])
+    with open(path, "w") as f:
+        f.write(HEADER + "\n" + " ".join(f"{x:.12f}" for x in last) + "\n")
+    return path
+
+
+def gmat_report_now(game, workdir, force_model="zonal"):
     """GMAT 重播目前歷程，把最後一列寫成帶表頭的報表檔，回傳路徑。沒有歷程時直接寫初始狀態。"""
     from tools.gmat_verify import game_to_script, run_gmat
     if game.history:
-        rows = run_gmat(game_to_script(game, "__REPORT__"))
+        rows = run_gmat(game_to_script(game, "__REPORT__", force_model))
         last = rows[-1]
     else:
         (rp, vp), (re, ve) = game.initial["pursuer"], game.initial["evader"]
@@ -63,7 +75,12 @@ def main():
     ap.add_argument("--opponents", default=None, help="copilot 推演用的對手模型（逗號分隔）")
     ap.add_argument("--max-turns", type=int, default=0, help="> 0 時只彩排前 N 回合")
     ap.add_argument("--name", default=None)
+    ap.add_argument("--force-model", default="zonal", choices=["zonal", "ranking_full"],
+                    help="GMAT（真實世界）的力學模型")
+    ap.add_argument("--resync", default="auto", choices=["auto", "on", "off"],
+                    help="每回合把引擎狀態重設成 GMAT 狀態（auto = ranking_full 才開）")
     args = ap.parse_args()
+    resync = args.resync == "on" or (args.resync == "auto" and args.force_model != "zonal")
 
     rng = np.random.default_rng(args.seed)
     if args.rules == "ranges":
@@ -82,12 +99,21 @@ def main():
 
     log = []
     t_start = time.time()
+    # ranking_full：GMAT 逐回合推進（從上回合的 GMAT 狀態跑一個窗口），不再每回合從頭重播
+    incremental = args.force_model != "zonal"
+    truth_state = {s_: (g.initial[s_][0].copy(), g.initial[s_][1].copy()) for s_ in ("pursuer", "evader")}
     with tempfile.TemporaryDirectory(prefix="rehearsal_") as wd:
         state_path = os.path.join(wd, "state.json")
         copilot.main(["init", state_path])
         while not g.done and (args.max_turns <= 0 or g.turn < args.max_turns):
             t0 = time.perf_counter()
-            rep = gmat_report_now(g, wd)
+            if incremental:
+                if g.history:
+                    from tools.gmat_verify import gmat_step
+                    truth_state = gmat_step(R, truth_state, g.history[-1], args.force_model)
+                rep = write_report(wd, len(g.history), g.t, truth_state)
+            else:
+                rep = gmat_report_now(g, wd, args.force_model)
             t_gmat = time.perf_counter() - t0
             copilot.main(["import", state_path, rep, "--pursuer-ship", "ShipP", "--evader-ship", "ShipE",
                           "--mover", g.mover, "--fuel-used", str(g.used["pursuer"]), str(g.used["evader"])])
@@ -97,6 +123,9 @@ def main():
             st["role"] = side
             truth = copilot.game_from_state(st)                         # 從 GMAT 匯入的「真實」狀態
             d_import = max(float(np.linalg.norm(truth.r(s) - g.r(s))) for s in ("pursuer", "evader"))
+            if resync:                                                   # 帳本跟真實世界同步
+                for s_ in ("pursuer", "evader"):
+                    g.set_state(s_, truth.r(s_), truth.v(s_))
 
             t1 = time.perf_counter()
             if g.mover == side:
@@ -122,7 +151,17 @@ def main():
                   f"GMAT {t_gmat:4.1f}s  決策 {t_decide:5.1f}s  匯入差 {1000 * d_import:6.2f} m  "
                   f"距離 {rec['distance_after_km']:9.2f} km  {rec['outcome'] or ''}", flush=True)
 
-        final = gmat_report_now(g, wd) if g.history else None
+        final = None
+        if g.history and incremental:
+            from tools.gmat_verify import gmat_step
+            truth_state = gmat_step(R, truth_state, g.history[-1], args.force_model)
+            final = write_report(wd, len(g.history), g.t, truth_state)
+        elif g.history:
+            final = gmat_report_now(g, wd, args.force_model)
+        truth_all = None
+        if g.history and args.force_model != "zonal":
+            from tools.gmat_verify import gmat_truth
+            truth_all = gmat_truth(g, args.force_model)
         if final:
             vals = np.loadtxt(final, skiprows=1)
             d_gmat = float(np.linalg.norm(vals[1:4] - vals[7:10]))
@@ -137,6 +176,11 @@ def main():
              f"- 結局：**{s['outcome'] or '（彩排截斷）'}**（我方{'勝' if g.winner == side else ('敗' if g.winner else '—')}），"
              f"{s['turns']} 回合，t = {s['t_end']:.0f} s，最近距離 {s['min_dist_km']:.2f} km",
              f"- 最終距離：引擎 {g.distance():.4f} km / GMAT {d_gmat:.4f} km",
+             f"- GMAT 力學模型 `{args.force_model}`、每回合重設引擎狀態 {'開' if resync else '關'}",
+             *([f"- **GMAT 真實軌跡判定**：最近距離 {truth_all['d_min_km']:.3f} km @ t={truth_all['t_min_sec']:.0f} s；"
+                + (f"t={truth_all['t_capture_sec']:.0f} s 進捕獲球（追者勝）" if truth_all['t_capture_sec'] is not None
+                   else "全程沒進捕獲球（躲者勝）")
+                + f"；引擎判定 {s['outcome']}（{g.winner} 勝）"] if truth_all else []),
              f"- 匯入狀態 vs 引擎最大差：{max((r['import_vs_engine_m'] for r in log), default=0):.2f} m",
              f"- 我方決策耗時：平均 {np.mean([r['decide_sec'] for r in log if r['side'] == side] or [0]):.1f} s、"
              f"最長 {max([r['decide_sec'] for r in log if r['side'] == side] or [0]):.1f} s；"

@@ -272,6 +272,13 @@ class Game:
                 break
         return rec
 
+    def set_state(self, side, r, v):
+        """把某方的位置速度換成外部給的值（彩排時讓帳本跟 GMAT 的「真實世界」同步）。"""
+        if self.mid_window:
+            raise RuntimeError("窗口中途不能換狀態")
+        self._r[side] = np.asarray(r, dtype=np.float64).reshape(3).copy()
+        self._v[side] = np.asarray(v, dtype=np.float64).reshape(3).copy()
+
     def summary(self) -> dict:
         return {
             "outcome": self.outcome, "winner": self.winner, "t_end": self.t, "t_max": self.t_max,

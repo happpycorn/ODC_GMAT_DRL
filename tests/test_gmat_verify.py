@@ -36,3 +36,29 @@ def test_gmat_replay_matches_physics(deg):
     assert out["max_dt_sec"] < 1e-3
     # 4000 s 內多次脈衝：兩邊位置差應在 10 m 以內（捕獲半徑的 1/500）
     assert out["max_dpos_km"] < 0.01, out["per_turn"]
+
+
+# ------------------------------------------------------------------ 全攝動（排位賽官方模型）彩排用
+def test_ranking_full_script_ascii_and_model():
+    g = _short_game(2)
+    s = game_to_script(g, "/tmp/x.txt", "ranking_full", dense_path="/tmp/d.txt")
+    s.encode("ascii")
+    assert "EGM96.cof" in s and "NRLMSISE00" in s and "PointMasses = {Sun, Luna}" in s
+    assert "ShipP.Cd = 2.2;" in s and "RF.Add = {ShipP.ElapsedSecs, " in s
+    z = game_to_script(g, "/tmp/x.txt")
+    assert "JGM2.cof" in z and "EGM96" not in z and "RF.Add" not in z and "Epoch = '21545';" in z
+
+
+def test_gmat_step_matches_full_replay_under_full_perturbation():
+    """逐回合推進（每回合從上回合的 GMAT 狀態重起、曆元跟著走）要跟整局重播一致。"""
+    from tools.gmat_verify import gmat_step, gmat_truth, run_gmat
+    g = _short_game(2)
+    rows = run_gmat(game_to_script(g, "__REPORT__", "ranking_full"))
+    state = {s: (g.initial[s][0].copy(), g.initial[s][1].copy()) for s in ("pursuer", "evader")}
+    for rec in g.history:
+        state = gmat_step(g.rules, state, rec, "ranking_full")
+    last = rows[-1]
+    assert np.linalg.norm(state["pursuer"][0] - last[1:4]) < 1e-3       # < 1 m
+    assert np.linalg.norm(state["evader"][0] - last[7:10]) < 1e-3
+    truth = gmat_truth(g, "ranking_full")
+    assert truth["d_min_km"] <= min(r["window_min_dist_km"] for r in g.history) + 1.0
