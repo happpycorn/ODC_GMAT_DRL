@@ -25,8 +25,11 @@ class Rules:
     fuel_pursuer_mps: float = 3000.0     # 追者總 Δv 預算
     fuel_evader_mps: float = 3000.0      # 躲者總 Δv 預算
     capture_radius_km: float = 5.0       # 相對距離 <= 此值即捕獲（追者勝）
-    t_max_sec: float = 0.0               # > 0 直接指定；<= 0 用 t_max_periods × 追者初始週期
-    t_max_periods: float = 4.0
+    t_max_sec: float = 0.0               # > 0 直接指定；<= 0 用 t_max_boundary_km 或 t_max_periods × 追者初始週期
+    t_max_periods: float = 4.0           # 追者初始軌道是雙曲線（沒有週期）時改用躲者的週期
+    # > 0（且 t_max_sec <= 0）：排位賽定義——飛掠方（初始比能量較高的一方，排位賽的外星船 A）純滑行、
+    # 過近地點後地心距離第一次增加到這個值（km，地心距離）的時刻。見 game.core.boundary_exit_time
+    t_max_boundary_km: float = 0.0
     gravity_degree: int = 2              # 0=點質量, 2=J2, 3=J3, 4=J4（同 physics.propagate）
     first_mover: str = "pursuer"         # 誰先下第一發
     crash_altitude_km: float = 100.0     # 軌跡低於此高度 = 撞地/再入（佔位，同 Planner MIN_PERIAPSIS）
@@ -44,6 +47,8 @@ class Rules:
             raise ValueError("burns_per_turn 至少 1")
         if self.window_sec <= 0:
             raise ValueError("window_sec 必須 > 0")
+        if not self.t_max_boundary_km >= 0:
+            raise ValueError(f"t_max_boundary_km 必須 >= 0（0 = 不用邊界定義），收到 {self.t_max_boundary_km!r}")
 
     def max_dv(self, side: str) -> float:
         return self.max_dv_pursuer_mps if side == "pursuer" else self.max_dv_evader_mps

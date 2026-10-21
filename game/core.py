@@ -12,6 +12,10 @@ T_max）→ 換另一方。滑行期間用 `physics.coast.coast_pair` 連續偵�
 勝負（官方）：追者在時間+燃料內靠近到捕獲半徑 → 追者勝；躲者撐到 T_max → 躲者勝。
 撞地（軌跡低於 crash_altitude）→ 撞的那方輸（佔位判定，待 HAP-50）。
 
+T_max（開賽時定死，之後不變）：`Rules.t_max_sec` > 0 直接用；否則 `t_max_boundary_km` > 0 用排位賽定義
+（飛掠方過近地點後地心距離第一次增加到任務邊界的時刻，見 boundary_exit_time）；否則 t_max_periods × 追者
+初始週期（追者是雙曲線、沒有週期時改用躲者的週期）。
+
 Agent 直接吃 Game（完整狀態：雙方 r/v、燃料、時間、規則），不必經過 RL 觀測；RL 的
 觀測由 game/obs.py 從 Game 組出來。
 """
@@ -21,7 +25,7 @@ import math
 import numpy as np
 
 from game.rules import SIDES, Rules, other
-from physics import EARTH_MU, RE_VAL, get_r0_v0, orbital_period
+from physics import EARTH_MU, RE_VAL, get_r0_v0, orbital_period, propagate
 from physics.coast import EV_CAPTURE, EV_CRASH_E, EV_CRASH_P, EV_NONE, coast_pair
 from physics.frames import rsw_basis
 
@@ -38,6 +42,96 @@ def sma_from_rv(r, v, mu=EARTH_MU):
     return -mu / (2.0 * energy) if energy < 0 else math.inf
 
 
+def specific_energy(r, v, mu=EARTH_MU):
+    """比機械能 v²/2 − μ/r（km²/s²）：< 0 橢圓、> 0 雙曲線。"""
+    return float(np.dot(v, v)) / 2.0 - mu / float(np.linalg.norm(r))
+
+
+def kepler_exit_time(r, v, boundary_km, mu=EARTH_MU):
+    """二體解析：從現在起純滑行，地心距離第一次「往外」穿過 boundary_km 的時刻（秒）。
+
+    雙曲線用 M = e·sinh F − F、橢圓用 M = E − e·sin E（同 Planner src/tmax.py 的 analytic_tmax，
+    只是吃 r, v 而不是六根數）。穿越不存在時丟 ValueError（訊息講原因）。"""
+    r = np.asarray(r, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    R = float(boundary_km)
+    r0 = float(np.linalg.norm(r))
+    rv = float(np.dot(r, v))
+    hv = np.cross(r, v)
+    h2 = float(np.dot(hv, hv))
+    en = specific_energy(r, v, mu)
+    e = math.sqrt(max(0.0, 1.0 + 2.0 * en * h2 / mu ** 2))
+    rp = h2 / (mu * (1.0 + e))
+    if R <= rp:
+        raise ValueError(f"任務邊界 {R:.1f} km ≤ 近地點距離 {rp:.1f} km：地心距離不會「增加到」邊界"
+                         "（邊界要給地心距離，不是高度）")
+    if abs(e - 1.0) < 1e-9:
+        raise ValueError("拋物線軌道（e≈1）不支援：請直接給 t_max_sec")
+    if e < 1e-12:
+        raise ValueError("圓軌道：地心距離不變，「過近地點後增加到邊界」沒有定義")
+    if e > 1.0:
+        a = -mu / (2.0 * en)                       # < 0
+        n = math.sqrt(mu / (-a) ** 3)
+        F0 = math.copysign(math.acosh(max(1.0, (1.0 + r0 / -a) / e)), rv)
+        Fb = math.acosh((1.0 + R / -a) / e)
+        T = ((e * math.sinh(Fb) - Fb) - (e * math.sinh(F0) - F0)) / n
+        if T <= 0.0:
+            raise ValueError(f"已經過了近地點、而且已在邊界外往外飛（r={r0:.1f} km ≥ {R:.1f} km）："
+                             "雙曲線不會再回來，T_max 不存在")
+        return T
+    a = -mu / (2.0 * en)
+    ra = a * (1.0 + e)
+    if R > ra:
+        raise ValueError(f"任務邊界 {R:.1f} km > 遠地點 {ra:.1f} km：橢圓軌道永遠在邊界內，T_max 不存在")
+    n = math.sqrt(mu / a ** 3)
+    E0 = math.acos(min(1.0, max(-1.0, (1.0 - r0 / a) / e)))
+    if rv < 0.0:
+        E0 = 2.0 * math.pi - E0
+    Eb = math.acos(min(1.0, max(-1.0, (1.0 - R / a) / e)))
+    dM = ((Eb - e * math.sin(Eb)) - (E0 - e * math.sin(E0))) % (2.0 * math.pi)
+    if dM <= 1e-12:
+        dM += 2.0 * math.pi                        # 剛好在邊界上往外：下一圈
+    return dM / n
+
+
+def boundary_exit_time(r, v, boundary_km, mu=EARTH_MU, gravity_degree=2, step_sec=120.0):
+    """排位賽 T_max：從現在起純滑行，地心距離第一次「往外」穿過 boundary_km（地心距離 km）的時刻（秒）。
+
+    規則原文是「A 過近地點後，地心距離第一次增加到任務邊界的時刻」。往外穿越時徑向速度 > 0，一定已經
+    過了某次近地點（可能在開賽前），所以等於「t > 0 之後第一次往外穿越」（同 Planner src/tmax.py）。
+    先用二體解析解（kepler_exit_time）確認穿越存在，再用引擎同一套重力模型（gravity_degree）分段傳播
+    找穿越區間、二分到 0.1 ms——跟比賽中純滑行的那艘船真正飛出邊界的時刻一致（J2 讓它跟解析解差幾秒）。"""
+    r = np.asarray(r, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    R = float(boundary_km)
+    t_ana = kepler_exit_time(r, v, R, mu)
+    t_end = 1.5 * t_ana + 3600.0
+    t, rr, vv = 0.0, r.copy(), v.copy()
+    rn = float(np.linalg.norm(rr))
+    while t < t_end:
+        h = min(step_sec, t_end - t)
+        r1, v1 = propagate(mu, rr, vv, h, gravity_degree)
+        rn1 = float(np.linalg.norm(r1))
+        if not math.isfinite(rn1):
+            break
+        if rn < R <= rn1:
+            lo, hi = 0.0, h
+            while hi - lo > 1e-4:
+                mid = 0.5 * (lo + hi)
+                if float(np.linalg.norm(propagate(mu, rr, vv, mid, gravity_degree)[0])) >= R:
+                    hi = mid
+                else:
+                    lo = mid
+            return t + hi
+        t, rr, vv, rn = t + h, r1, v1, rn1
+    raise ValueError(f"數值傳播到 t={t_end:.0f} s 都沒有往外穿過邊界 {R:.1f} km（二體解析 {t_ana:.1f} s）")
+
+
+def flyby_side(rp, vp, re, ve, mu=EARTH_MU):
+    """飛掠方 = 初始比能量較高的一方（雙曲線那方；排位賽的外星船 A）。"""
+    return "evader" if specific_energy(re, ve, mu) > specific_energy(rp, vp, mu) else "pursuer"
+
+
 class Game:
     def __init__(self, rules: Rules, rp, vp, re, ve, mu: float = EARTH_MU):
         self.rules = rules
@@ -50,8 +144,22 @@ class Game:
         self.t = 0.0
         if rules.t_max_sec > 0:
             self.t_max = float(rules.t_max_sec)
+            self.t_max_basis = "t_max_sec"
+        elif rules.t_max_boundary_km > 0:
+            side = flyby_side(self._r["pursuer"], self._v["pursuer"], self._r["evader"], self._v["evader"], mu)
+            self.t_max = boundary_exit_time(self._r[side], self._v[side], rules.t_max_boundary_km, mu,
+                                            rules.gravity_degree)
+            self.t_max_basis = f"boundary({side})"
         else:
-            self.t_max = rules.t_max_periods * orbital_period(sma_from_rv(self._r["pursuer"], self._v["pursuer"], mu), mu)
+            self.t_max_basis = "periods(pursuer)"
+            T = orbital_period(sma_from_rv(self._r["pursuer"], self._v["pursuer"], mu), mu)
+            if not math.isfinite(T):
+                # 追者初始軌道是雙曲線：沒有週期，T_max 會變 inf、比賽永遠不會超時 → 改用躲者的週期
+                T = orbital_period(sma_from_rv(self._r["evader"], self._v["evader"], mu), mu)
+                self.t_max_basis = "periods(evader)"
+                if not math.isfinite(T):
+                    raise ValueError("雙方初始軌道都沒有週期（雙曲線）：請用 t_max_sec 或 t_max_boundary_km 指定 T_max")
+            self.t_max = rules.t_max_periods * T
         self.mover = rules.first_mover
         self.turn = 0
         self.outcome = None
@@ -78,8 +186,8 @@ class Game:
                       mu: float = EARTH_MU):
         """從比賽進行中的某個狀態建 Game（copilot 用：當天看到的是中途狀態）。
 
-        t_max 給絕對秒數（從比賽開始算）；未給時沿用 rules 的定義（以「此刻」追者週期換算，
-        只適合 t=0）。
+        t_max 給絕對秒數（從比賽開始算）；未給時沿用 rules 的定義（以「此刻」的狀態算週期或飛出
+        邊界的時刻，只適合 t=0）。
         """
         R = rules if t_max is None else rules.with_(t_max_sec=float(t_max))
         g = cls(R, rp, vp, re, ve, mu)

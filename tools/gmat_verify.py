@@ -273,11 +273,13 @@ def gmat_step(rules, state, rec, force_model="ranking_full", console=GMAT_CONSOL
 def gmat_truth(game, force_model="ranking_full", console=GMAT_CONSOLE):
     """GMAT 重播整局（密集報表），回傳真實最近距離與捕獲時刻（官方會用的判定）。
 
-    引擎在捕獲/撞地的瞬間就結束比賽，最後一個窗口只滑到事件時刻；那樣 GMAT 只看得到「剛好
-    碰到邊界」。所以重播時把最後一個窗口補滿（到窗口結束或 T_max），讓 GMAT 自己判斷有沒有進去。"""
+    引擎在捕獲的瞬間就結束比賽，最後一個窗口只滑到事件時刻；那樣 GMAT 只看得到「剛好碰到邊界」。
+    所以捕獲時把最後一個窗口補滿（到窗口結束或 T_max），讓 GMAT 自己判斷有沒有進去。撞地時不補：
+    太空船已經在大氣層裡，全攝動模型的阻力會讓積分器步長縮到幾乎停住（tests/test_flyby.py 實測：3000 s
+    的局重播 147 s、密集報表 15 萬列），而且撞地之後的接近也不算數（攔截前穿越地球才失格）。"""
     from types import SimpleNamespace
     hist = list(game.history)
-    if hist and game.outcome not in (None, "timeout"):
+    if hist and game.outcome == "capture":
         last = hist[-1]
         full = min(game.rules.window_sec, game.t_max - last["t"])
         if full > last["coast_sec"]:

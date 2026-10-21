@@ -80,12 +80,21 @@ def ship_entry(rec, ship):
         return {"r_km": r.tolist(), "v_kms": v.tolist()}
     if all(x is not None for x in kep):
         el = dict(zip(("sma", "ecc", "inc", "raan", "aop", "ta"), kep))
-        if el["sma"] > 1e6:
+        if abs(el["sma"]) > 1e6:
             raise StateImportError(f"{ship} SMA={el['sma']:.3g}：看起來是公尺")
         if max(abs(el["inc"]), abs(el["raan"]), abs(el["aop"]), abs(el["ta"])) <= 2 * math.pi + 1e-9 and \
                 any(abs(el[k]) > 1e-6 for k in ("inc", "raan", "aop", "ta")):
             raise StateImportError(f"{ship} 角度全部 <= 2π：可能是弧度，GMAT 六根數角度單位是度（確認後再匯入）")
-        if not (0.0 <= el["ecc"] < 1.0 and el["sma"] > RE_VAL):
+        if el["ecc"] > 1.0:
+            # 雙曲線（排位賽的飛掠船）：GMAT 慣例 SMA < 0，近地點半徑 = SMA·(1 − ECC)，真近點角要在漸近線內
+            if not el["sma"] < 0.0:
+                raise StateImportError(f"{ship} ECC={el['ecc']} > 1 是雙曲線，SMA 應該是負的（GMAT 慣例），收到 {el['sma']}")
+            if el["sma"] * (1.0 - el["ecc"]) < RE_VAL - 50:
+                raise StateImportError(f"{ship} 雙曲線近地點半徑 {el['sma'] * (1.0 - el['ecc']):.1f} km 在地表下，不合理")
+            if 1.0 + el["ecc"] * math.cos(math.radians(el["ta"])) <= 0.0:
+                raise StateImportError(f"{ship} TA={el['ta']}° 在雙曲線漸近線外（|TA| 要 < "
+                                       f"{math.degrees(math.acos(-1.0 / el['ecc'])):.2f}°）")
+        elif not (0.0 <= el["ecc"] < 1.0 and el["sma"] > RE_VAL):
             raise StateImportError(f"{ship} 六根數不合理（sma={el['sma']}, ecc={el['ecc']}）")
         return {"elements": el}
     missing = [k for k, v in zip(CART, cart) if v is None]

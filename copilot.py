@@ -37,7 +37,7 @@ from game.rules import Rules, other
 from game.scenarios import DEFAULT_ORBIT_EVADER, DEFAULT_ORBIT_PURSUER, sample_scenario
 from physics import EARTH_MU, RE_VAL, get_r0_v0
 from physics.coast import closest_approach
-from physics.frames import rsw_basis, rv2coe, vnb_basis
+from physics.frames import rsw_basis, vnb_basis
 
 # 第一個是預設採用的大腦。rollout 規劃器是目前評測最強（reports/rollout_eval_default.md）：
 # 追者對 DvEvader 50%（LambertPursuer 17%）、躲者對 LambertPursuer 存活 93%，決策 ~140 ms
@@ -103,8 +103,20 @@ def state_from_game(g, role):
 
 # ------------------------------------------------------------------ 分析
 def _perigee_alt(r, v, mu=EARTH_MU):
-    c = rv2coe(r, v, mu)
-    return c["sma"] * (1 - c["ecc"]) - RE_VAL if math.isfinite(c["sma"]) and c["sma"] > 0 else float("nan")
+    """近地點高度 km。用 r_p = h²/(μ(1+e))：橢圓、雙曲線（飛掠）、拋物線都成立（舊版 sma <= 0 回傳 nan）。"""
+    r = np.asarray(r, dtype=float)
+    v = np.asarray(v, dtype=float)
+    h = np.cross(r, v)
+    h2 = float(h @ h)
+    energy = float(v @ v) / 2.0 - mu / float(np.linalg.norm(r))
+    e = math.sqrt(max(0.0, 1.0 + 2.0 * energy * h2 / mu ** 2))
+    return h2 / (mu * (1.0 + e)) - RE_VAL
+
+
+def _orbit_type(r, v, mu=EARTH_MU):
+    """'elliptic' 或 'hyperbolic (v∞ x.xx km/s)'（飛掠方）。"""
+    energy = float(np.dot(v, v)) / 2.0 - mu / float(np.linalg.norm(r))
+    return f"hyperbolic (v_inf {math.sqrt(2.0 * energy):.2f} km/s)" if energy > 0 else "elliptic"
 
 
 def situation(g):
@@ -126,6 +138,7 @@ def situation(g):
         "fuel_left": {s: g.fuel_left(s) for s in ("pursuer", "evader")},
         "burn_cap": {s: g.burn_cap(s) for s in ("pursuer", "evader")},
         "perigee_alt_km": {s: _perigee_alt(g.r(s), g.v(s)) for s in ("pursuer", "evader")},
+        "orbit_type": {s: _orbit_type(g.r(s), g.v(s)) for s in ("pursuer", "evader")},
         "coast_is_safe": {s: orbit_survives(g, s, np.zeros(3)) for s in ("pursuer", "evader")},
     }
 
@@ -261,6 +274,10 @@ def print_advice(out, side):
           f"單發上限 P {s['burn_cap']['pursuer']:.0f} / E {s['burn_cap']['evader']:.0f}")
     print(f"  近地點高度 P {s['perigee_alt_km']['pursuer']:.0f} / E {s['perigee_alt_km']['evader']:.0f} km   "
           f"不推也安全 P={s['coast_is_safe']['pursuer']} E={s['coast_is_safe']['evader']}")
+    types = s.get("orbit_type", {})
+    hyp = [f"{k} {types[k]}" for k in ("pursuer", "evader") if types.get(k, "elliptic") != "elliptic"]
+    if hyp:
+        print("  飛掠：" + "、".join(hyp))
     if out.get("note"):
         print("  ⚠️ " + out["note"])
     for a in out["advice"]:
