@@ -55,3 +55,10 @@
 
 - 06:30 前後三個子代理（④ 雙曲線飛掠、⑩ 追者反制 lazy_evader、⑧ sp4 重訓）全部撞到用量上限中斷，到 10:00 重置；中斷前 master 的 ② 整合已 commit（`fa0a913`、`cc919d5`、`7d6a973`）。
 - 恢復：④、⑩ 叫回原代理接續；⑧ 中斷前還沒有改動，等前兩個有一個完成再接上（同時維持 2 個代理）。
+
+## 10:50 合併 ④ 雙曲線飛掠（HAP-121）
+
+- `7c6f7c4`：`Rules.t_max_boundary_km`（排位賽 T_max 定義，預設 0）、`flyby`／`flyby_pursuer` 場景家族、雙曲線修正（追者雙曲線 T_max inf、copilot 近地點 nan、state_io 拒收雙曲線、gmat_truth 撞地後多跑）。
+- 驗證：rebase 到 master 後**先在分支 worktree 跑 pytest：155 項全綠**，再快轉；合併後主 checkout 逐位元（default／ranking_like／2burn 各 36 局）與 `80dc622` 相同。
+- 結論（E23）：飛掠場景躲者壓倒性有利（250/3000 追者對會閃的躲者 288 局 0 捕獲）。手冊加飛掠段落、第二節第 5 題補任務邊界。
+- 同時開跑：⑤ copilot 整體評測與決策時間、`orbit_survives` 漏判修正（E22、E23 都踩到；開關、預設關）。

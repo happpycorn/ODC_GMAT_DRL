@@ -442,3 +442,20 @@ Exploitability（我方勝率）：
 - **附帶發現（未修）**：`agents/analytic.py` 的 `orbit_survives` 對「近地點在地表下、但二體近地點時刻在比賽結束後」的軌跡會判安全，實際上還沒到近地點就先撞地；DvEvader、LambertPursuer、EscapeEvader、`rescue_burn` 都用它。修正會改變預設行為（只影響近地點低於門檻的軌道），留給使用者決定。
 - **限制**：只對我們自己的追者測過；ReserveRolloutEvader（省油版 rollout 躲者）一樣強但每步 ~1.1 s、油 3 倍，不推薦。3 發的 v3、強化版追者在對稱／2 發規則沒跑。
 - **產物**：`docs/notes/evader_improvement.md`、`reports/evader_*.md`、`tests/test_evader_lab.py`。
+
+## E23 雙曲線／飛掠幾何（HAP-121，2026-10-21）
+- **問題**：排位賽的 A 是雙曲線飛掠（T_max =「A 過近地點後地心距離第一次增加到任務邊界的時刻」），四強賽可能沿用。引擎、agent、copilot、GMAT 重播都只在橢圓 LEO 測過。
+- **改動**：`Rules.t_max_boundary_km`（預設 0＝舊定義；> 0 用排位賽定義，飛掠方＝初始比能量較高的一方，J2 數值傳播＋二分，跟二體解析差 ≤ 2 s）；
+  `game/scenarios.py` 新家族 `flyby`（躲者雙曲線）、`flyby_pursuer`（追者雙曲線）——先選交會點再倒推，近地點 300–2000 km、v∞ 1–4 km/s、邊界 40,000 km（佔位）、T_max 1.9–3.35 h；`mixed` 抽樣 1200 筆逐筆不變。
+  修掉：追者雙曲線＋週期倍數 T_max 變 inf（改用躲者週期）、copilot 近地點高度對雙曲線回 nan、`state_io` 拒收雙曲線六根數（另加 SMA 正負號／單位防呆）、`gmat_truth` 撞地後還補滿窗口（一局 147 s → 13 s）。
+- **結果**（flyby、seed 1、每格 24 局）：
+  - 250/3000 + 邊界：Lambert／rollout／強化版 rollout 追者對**不動**的躲者 92% [74–98]；對 dv／rollout／escape／sb3 躲者**全部 0% [0–14]（288 局 0 捕獲）**。機制：躲者在交會前一窗口推一發就能讓交會點移動 ≥ 75 km，追者最後一窗口最多修 75 km；把交會提早到 600–1500 s 也是 0/72。
+    rollout_evader 平均只用 260 m/s，但常只閃開 6–10 km——最近距離 < 7 km 的 7 局用 GMAT 全攝動重判，全部仍沒進捕獲球（5.98–6.87 km）。
+  - 強化版 rollout 追者與預設 rollout 120/120 局結局相同，決策慢約 10 倍。
+  - 對稱 1500/3000 + 邊界（第二組規則）：rollout_evader 72/72 存活；escape_evader 對 rollout 追者只剩 46%（250 規則下 100%，13:0，p=0.0002——開局兩發燒光燃料）。
+  - flyby_pursuer（n=12）：對不動躲者 100%、對會動的躲者 0%。
+  - GMAT 重播（3.2 h、39 回合）：J2 位置差 ≤ 2.2 m；全攝動 LEO 方 ≤ 0.83 km、雙曲線方 ≤ 56 m。copilot drill 兩個角色各一場（追者輸、躲者贏），無 nan／例外。
+- **結論**：**若四強賽是飛掠場景，躲者壓倒性有利**（單發上限相同時，躲者最後一次閃避的位移大於追者最後一窗口能修的量）。抽到躲者：任何會閃的大腦都行，最省油的是 rollout／lazy；抽到追者：幾乎只能靠對手失誤（不動或撞地），以最小化最近距離為目標。
+- **沒修**（在 agents/，筆記附重現）：`orbit_survives` 漏判（同 E22）——飛掠局 T_max 只有 1.3–2 個 LEO 週期，常觸發：Lambert 追者撞地 31/120 局、sb3 追者 33/120（不影響勝負）；flyby_pursuer 下 sb3 躲者撞地 23/48、escape 2/48（**因此輸掉**）。`physics/coast.py` 撞地那段 substep 會把撞地後的距離併進 `min_dist`（只影響回報值）。
+- **逐位元**：default／ranges／ranking_like 各 48 局 144/144 相同（子任務 worktree）；合併後主 checkout 另驗。
+- **產物**：`docs/notes/flyby_geometry.md`、`reports/flyby_*.md`、`configs/rulesets/flyby_{ranking_like,symmetric}.json`、`tests/test_flyby.py`（49 項）。
