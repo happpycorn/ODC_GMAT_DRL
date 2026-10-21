@@ -50,3 +50,8 @@
   pytest 104 項全綠；逐位元（default、ranking_like 各 36 局）與 `80dc622` 相同；copilot advise 實測 ★ = lazy_evader（4/4 對手模型贏，30.8 s／4 worker）。
 - 文件：E22、手冊躲者主力打法與追者警訊、ROADMAP；暫定總結已更新。新開第 10 項「追者反制受威脅才閃的躲者」。
 - 06:20 全攝動 GMAT 彩排（lazy_evader 當我方躲者、照 ★ 下、對 rollout 追者、ranking_like、ranking_full）：撐到時限獲勝，GMAT 真實最近 8.876 km，決策平均 13.2 s／最長 30.6 s（`reports/e22_rehearsal_full_lazy_evader_vs_rollout.md`）。
+
+## 10:00 第二次用量上限中斷後恢復
+
+- 06:30 前後三個子代理（④ 雙曲線飛掠、⑩ 追者反制 lazy_evader、⑧ sp4 重訓）全部撞到用量上限中斷，到 10:00 重置；中斷前 master 的 ② 整合已 commit（`fa0a913`、`cc919d5`、`7d6a973`）。
+- 恢復：④、⑩ 叫回原代理接續；⑧ 中斷前還沒有改動，等前兩個有一個完成再接上（同時維持 2 個代理）。
