@@ -68,3 +68,8 @@
 - `18d4174`（只新增 `agents/pursuer_lab.py`、測試、筆記、報表）；rebase 到 master 後先在分支 worktree 跑 pytest 全綠，再快轉。
 - 結論（E24）：照排位賽數字，lazy 型躲者抓不到（0/36）——回合交替＋單發上限對稱的結構；HarassPursuer 逼它多耗一倍油（s5 21/3 局，p=0.0003）。手冊追者警訊改成具體做法；copilot 預設沒改（理由見 E24）。
 - 額度：使用者新規矩「只用到 80%」；10:40 時 5 小時 53%、每週 42%。
+
+## 2026-10-22 10:55 合併 `orbit_survives` 漏判修正（E25，開關預設關）
+
+- `7d1821f` 系（rebase 後）：`ODC_STRICT_SURVIVAL` 開關；分支 worktree pytest 全綠後快轉；主 checkout 逐位元（default、ranking_like 各 36 局）與 `80dc622` 相同。
+- 開關打開：1,008 局中沒有任何一局變差；flyby_pursuer 30 局翻成躲者勝（不再自己撞地）。預設維持關（逐位元規矩），手冊前一晚清單加 `export ODC_STRICT_SURVIVAL=1`，改預設留給使用者決定。

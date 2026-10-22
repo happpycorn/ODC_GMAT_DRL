@@ -158,6 +158,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 ## 八、前一晚準備
 
 - [ ] 兩台筆電 `git pull && uv sync && uv run pytest`（全綠，含 GMAT 重播測試）
+- [ ] 當天的 shell 先 `export ODC_STRICT_SURVIVAL=1`（修正 `orbit_survives` 對「近地點在地底、還沒到近地點就先撞地」的漏判；預設還是關，E25）
 - [ ] 各跑一場彩排：`uv run python tools/dress_rehearsal.py --role pursuer` 與 `--role evader`（GMAT 當真實世界，確認整條流程與每回合耗時；參考值：決策平均 1.5–3.9 s、最長 ~14 s）
 - [ ] 用正式規則加全攝動再各跑一場：`--rules configs/rules_final.json --force-model ranking_full`（GMAT 用排位賽官方模型當真實世界、每回合把引擎重設成 GMAT 狀態，賽後並列 GMAT 與引擎的勝負判定；E18）
 - [ ] `uv run python copilot.py drill --role pursuer` 與 `--role evader` 各跑一場（預熱 numba 快取）
