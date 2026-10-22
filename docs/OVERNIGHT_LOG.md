@@ -62,3 +62,9 @@
 - 驗證：rebase 到 master 後**先在分支 worktree 跑 pytest：155 項全綠**，再快轉；合併後主 checkout 逐位元（default／ranking_like／2burn 各 36 局）與 `80dc622` 相同。
 - 結論（E23）：飛掠場景躲者壓倒性有利（250/3000 追者對會閃的躲者 288 局 0 捕獲）。手冊加飛掠段落、第二節第 5 題補任務邊界。
 - 同時開跑：⑤ copilot 整體評測與決策時間、`orbit_survives` 漏判修正（E22、E23 都踩到；開關、預設關）。
+
+## 2026-10-22 10:40 合併 ⑩ 追者反制 lazy_evader（HAP-122）
+
+- `18d4174`（只新增 `agents/pursuer_lab.py`、測試、筆記、報表）；rebase 到 master 後先在分支 worktree 跑 pytest 全綠，再快轉。
+- 結論（E24）：照排位賽數字，lazy 型躲者抓不到（0/36）——回合交替＋單發上限對稱的結構；HarassPursuer 逼它多耗一倍油（s5 21/3 局，p=0.0003）。手冊追者警訊改成具體做法；copilot 預設沒改（理由見 E24）。
+- 額度：使用者新規矩「只用到 80%」；10:40 時 5 小時 53%、每週 42%。

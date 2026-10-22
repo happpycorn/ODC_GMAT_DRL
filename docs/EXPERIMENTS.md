@@ -459,3 +459,17 @@ Exploitability（我方勝率）：
 - **沒修**（在 agents/，筆記附重現）：`orbit_survives` 漏判（同 E22）——飛掠局 T_max 只有 1.3–2 個 LEO 週期，常觸發：Lambert 追者撞地 31/120 局、sb3 追者 33/120（不影響勝負）；flyby_pursuer 下 sb3 躲者撞地 23/48、escape 2/48（**因此輸掉**）。`physics/coast.py` 撞地那段 substep 會把撞地後的距離併進 `min_dist`（只影響回報值）。
 - **逐位元**：default／ranges／ranking_like 各 48 局 144/144 相同（子任務 worktree）；合併後主 checkout 另驗。
 - **產物**：`docs/notes/flyby_geometry.md`、`reports/flyby_*.md`、`configs/rulesets/flyby_{ranking_like,symmetric}.json`、`tests/test_flyby.py`（49 項）。
+
+## E24 追者反制「受威脅才閃」的躲者（HAP-122，2026-10-22）
+- **問題**：E22 的 lazy_evader 若是對手的打法，我們所有追者 0–4%。有沒有追者打法抓得到它？
+- **新追者**（`agents/pursuer_lab.py`，只新增檔案）：`HarassPursuer`（燃料消耗戰：窗口內抓得到就抓；用躲者模型模擬它的閃避來逼角；否則挑「Δv + λ×等待」最小、能讓它判定受威脅的一發；它沒油後 Lambert 收尾；保留一發上限的油；自己用 `strict_survives`）、`LazyHunter`（先照 rollout 打，偵測到「受威脅才推」才換 Harass）。
+- **為什麼抓不到**：單發上限相同時，躲者一發的位移槓桿是 (300+t) s、追者只有 t s。103 個受威脅局面它一律推滿 250：剩油 ≥ 150 m/s 時閃完後我們窗口內 0/103 抓得到（剩 100 時 11/103、剩 50 時 47/103）。逼它閃一次的成本 ≈ 它閃一次的油（燃料戰約 1:1），T_max ~4 圈只逼得出 4–7 次，3000 m/s 耗不完。
+- **結果**（ranking_like；seed 1 開發 12 局、seed 5 沒調參 24 局；逐局配對）：
+  - 所有追者 **0/36**（含用精確躲者模型逼角的版本）。LazyHunter 讓它多耗一倍油：s5 1090 vs 546 m/s（21/3 局，p=0.0003）、s1 12/0（p=0.0005）；代價是最近距離中位數 47.5 vs 37.3 km（rollout 較近 17/6，p=0.035）。
+  - 對主動躲者沒變差：對 rollout_evader 都 7/24（1/1，p=1），對 dv_evader 20/24 逐局相同。
+  - 躲者燃料只剩一半（1500）：Hunter s1 3/12、s5 2/24（rollout 0/36；合計 5/0，p=0.06，方向一致但不顯著）。
+  - 第二組規則：2 發時 Harass 也 0/12 但讓它多耗油（1750 vs 1100，10/0，p=0.002）；對稱 1500/3000 + 2 發：lazy_evader 被逼兩次就沒油，rollout 與 Hunter 都 3/12（逐局相同）。
+- **結論**：**照排位賽數字（單發與燃料對稱），lazy 型躲者抓不到**——這是回合交替＋單發上限對稱的結構，不是大腦不夠強。抽到追者遇到 lazy 型對手：以計分的次要目標為準（計分看對手耗油或不明 → HarassPursuer；看最近距離 → rollout，可在推演對手模型加 lazy_evader）；我方燃料 ≥ 2 倍時用 HarassPursuer 並留一發收尾；1500 級單發上限時 rollout 即可（它被逼兩次就沒油），重點是自己別把油燒光。
+- **copilot**：沒改預設。`HarassPursuer` 要由操作者在看到對手 lazy 行為後用 `--brains` 手動加（copilot 每次從局勢檔重建、沒有歷史，LazyHunter 的自動偵測在 copilot 裡無效）；lazy_evader 沒加進追者的預設推演對手模型——所有追者大腦都會輸給它，加了會讓「先比最壞」的排序只剩「誰比較近」。
+- **限制**：門檻不同的 lazy 變體、追者燃料 6000、強化版 rollout、兩發組合規劃沒做；多發規則下 LazyHunter 的偵測不會觸發。
+- **產物**：`docs/notes/pursuer_vs_lazy.md`、`reports/plazy_*.md`、`tests/test_pursuer_lab.py`。
