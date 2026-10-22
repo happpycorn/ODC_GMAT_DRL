@@ -7,6 +7,8 @@
                                               產生「從現在狀態施加建議脈衝並滑行一窗口」的 GMAT 腳本，
                                               拿去會場測試電腦先跑（--verify 在本機 GMAT 比對）
   4. 對手動完、官方更新狀態後，改 state.json 再 advise
+  時間緊：`advise state.json --prune`（★ 不變、推演表只做到能確定 ★ 為止）、再緊加 `--budget-sec 20`
+  （超時就停，★ 只在做完的大腦裡選）；決策時間與建議見 docs/notes/copilot_eval.md
 
 演練模式（不需要真比賽）：
   `copilot.py drill --role pursuer --opponent dv_evader --rules default`
@@ -143,14 +145,18 @@ def situation(g):
     }
 
 
-def rollout(g, side, plan, my_agent, opp_agent):
-    """我方先照 plan（[(偏移秒數, Δv)]）下完這回合，之後我方交給 my_agent、對手交給 opp_agent 下到比賽結束。"""
+def rollout(g, side, plan, my_agent, opp_agent, stop=None):
+    """我方先照 plan（[(偏移秒數, Δv)]）下完這回合，之後我方交給 my_agent、對手交給 opp_agent 下到比賽結束。
+
+    stop（可選，快速模式用）：每回合開始前呼叫 stop(h)，回傳 True 就中止推演、回傳 None。"""
     h = g.clone()
     if h.rules.burns_per_turn <= 1:
         h.play_turn(plan[0][1])
     else:
         h.play_plan(plan)
     while not h.done:
+        if stop is not None and stop(h):
+            return None
         take_turn(h, my_agent if h.mover == side else opp_agent)
     s = h.summary()
     s["we_win"] = h.winner == side
@@ -194,15 +200,36 @@ def _with_workers(b, workers):
     return b
 
 
-def advise(st, brains=None, opp_models=None, rollouts=True, log=print):
+def _default_workers():
+    return int(os.environ.get("COPILOT_WORKERS", max(1, min(8, (os.cpu_count() or 2) - 2))))
+
+
+def default_brains(side, workers=None):
+    """advise 預設的大腦清單：DEFAULT_BRAINS（rollout 大腦帶 worker 數）+ 部署的 RL 策略。"""
+    workers = _default_workers() if workers is None else int(workers)
+    brains = [_with_workers(b, workers) for b in DEFAULT_BRAINS[side]]
+    deployed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{side}.zip")
+    if os.path.exists(deployed):              # tools/promote_model.py 部署的 RL 策略自動加入
+        brains.append("sb3:" + deployed)
+    return brains
+
+
+def advise(st, brains=None, opp_models=None, rollouts=True, log=print, *, prune=False, budget_sec=None,
+           workers=None, with_situation=True, rank="worst"):
+    """預設（prune=False、budget_sec=None）：每個大腦的建議 × 每個對手模型推演到終局，全部做完再排序。
+
+    可選（任一個有設就走 _advise_staged，大腦一個一個做「決策 → 推演表」）：
+      prune=True      推演中途就確定某大腦不可能成為 ★ 時停掉它的推演表；★ 與不剪枝完全相同
+      budget_sec=S    超過 S 秒就停：還沒開始的大腦跳過、推到一半的推演表作廢，★ 只在推演表完整的大腦裡選
+      with_situation=False  不算戰況（agent 用）
+      rank="wins"     ★ 改成先比贏幾個對手模型（rank_advice 的 order；預設 "worst" = 先比最壞）
+    workers：rollout 大腦的平行 worker 數（None = 環境變數 COPILOT_WORKERS 或預設）。"""
+    if prune or budget_sec is not None or not with_situation or rank != "worst":
+        return _advise_staged(st, brains, opp_models, rollouts, prune, budget_sec, workers, with_situation, rank)
     g = game_from_state(st)
     side = st["role"]
     if not brains:
-        workers = int(os.environ.get("COPILOT_WORKERS", max(1, min(8, (os.cpu_count() or 2) - 2))))
-        brains = [_with_workers(b, workers) for b in DEFAULT_BRAINS[side]]
-        deployed = os.path.join(os.path.dirname(os.path.abspath(__file__)), "models", f"{side}.zip")
-        if os.path.exists(deployed):              # tools/promote_model.py 部署的 RL 策略自動加入
-            brains.append("sb3:" + deployed)
+        brains = default_brains(side, workers)
     opp_models = opp_models or DEFAULT_OPP_MODELS[side]
     out = {"situation": situation(g), "advice": []}
     if g.done:
@@ -248,9 +275,11 @@ def _rollout_value(r, side):
     return r["t_end"] / 100.0
 
 
-def rank_advice(advice, side):
+def rank_advice(advice, side, order="worst"):
     """依推演表排序大腦：先看「對所有對手模型的最壞結果」，再看平均（HAP-108 教訓：預設大腦
-    自己用的對手模型較弱，第一建議不一定是推演表上最好的）。"""
+    自己用的對手模型較弱，第一建議不一定是推演表上最好的）。
+
+    order="wins"（可選，見 docs/notes/copilot_eval.md）：先比贏幾個對手模型，再比最壞、平均。"""
     rows = []
     for a in advice:
         vals = [_rollout_value(r, side) for r in a["rollouts"]]
@@ -258,8 +287,156 @@ def rank_advice(advice, side):
             continue
         rows.append({"brain": a["brain"], "worst": min(vals), "mean": float(np.mean(vals)),
                      "wins": sum(r["we_win"] for r in a["rollouts"]), "n": len(vals)})
-    rows.sort(key=lambda x: (x["worst"], x["mean"]), reverse=True)
+    if order == "wins":
+        rows.sort(key=lambda x: (x["wins"], x["worst"], x["mean"]), reverse=True)
+    else:
+        rows.sort(key=lambda x: (x["worst"], x["mean"]), reverse=True)
     return rows
+
+
+# ------------------------------------------------------------------ 快速模式（advise 的 prune / budget_sec）
+PRUNE_EPS = 1e-9
+
+
+def _value_upper_bound(h, side):
+    """推演還沒結束時，最後 _rollout_value 的上界：我方已用燃料、時間只增不減。
+    贏：追者 1000 − 1e-3·(燃料 + t)、躲者 1000 − 1e-3·燃料；輸：追者 −最近距離 ≤ 0、躲者 t_end/100 ≤ t_max/100。"""
+    if side == "pursuer":
+        return max(1000.0 - 1e-3 * h.used["pursuer"] - 1e-3 * h.t, 0.0)
+    return max(1000.0 - 1e-3 * h.used["evader"], h.t_max / 100.0)
+
+
+def _rollout_stop(side, thr, deadline, why):
+    def stop(h):
+        if thr is not None and _value_upper_bound(h, side) < thr - PRUNE_EPS:
+            why["status"] = "pruned"
+            return True
+        if deadline is not None and time.perf_counter() > deadline:
+            why["status"] = "timeout"
+            return True
+        return False
+    return stop
+
+
+def _spec_key(spec):
+    """續行 agent 規格的正規化（去掉 workers：平行與否結果相同）。"""
+    if isinstance(spec, dict):
+        kw = {k: v for k, v in spec.items() if k not in ("workers", "_table_cont")}
+        return kw["name"] if len(kw) == 1 else json.dumps(kw, sort_keys=True, default=str)
+    return str(spec)
+
+
+def _prune_threshold(best, rank, cap):
+    """推演中途的剪枝門檻：這個推演的分數上界低於它，這個大腦就不可能贏過目前最佳（cap = 最多還能贏幾個）。"""
+    if best is None:
+        return None
+    if rank == "wins":
+        return best[1] if cap <= best[0] else None
+    return best[0]
+
+
+def _beaten(best, rank, cap, worst_so_far):
+    """已做完的推演就足以確定這個大腦的排序鍵輸給目前最佳。"""
+    if rank == "wins":
+        return cap < best[0] or (cap == best[0] and worst_so_far < best[1] - PRUNE_EPS)
+    return worst_so_far < best[0] - PRUNE_EPS
+
+
+def _advise_staged(st, brains, opp_models, rollouts, prune, budget_sec, workers, with_situation, rank="worst"):
+    """大腦依序「決策 → 推演表」。★ 只在推演表完整（table_status == "complete"）的大腦裡選。
+
+    剪枝（prune）：目前最佳大腦（推演表完整、排序鍵最大）的最壞分數 = 門檻；某大腦任一推演的分數
+    （或推演中途的上界）低於門檻，它的排序鍵一定輸給目前最佳 → 不可能是 ★，停掉（rank="wins" 時再加上
+    「最多還能贏幾個」的條件）。對手模型順序、同一個大腦物件連續推演（EscapeEvader 這類有狀態的大腦）都跟
+    預設一樣，所以 ★ 與不剪枝相同。
+    推演重用：續行是 RolloutPlanner（無狀態）、計畫逐位元相同、續行規格相同的推演直接沿用結果（強化版 rollout
+    追者的推演表續行就是預設 rollout 追者，第一發常常一樣）。"""
+    from agents.rollout import RolloutPlanner
+    t_start = time.perf_counter()
+    deadline = None if budget_sec is None else t_start + float(budget_sec)
+    g = game_from_state(st)
+    side = st["role"]
+    if not brains:
+        brains = default_brains(side, workers)
+    opp_models = opp_models or DEFAULT_OPP_MODELS[side]
+    out = {"situation": situation(g) if with_situation else None, "advice": []}
+    if g.done:
+        out["note"] = f"比賽已結束：{g.outcome}"
+        return out
+    if g.mover != side:
+        out["note"] = f"現在輪到 {g.mover}，不是我方（{side}）——以下建議是假設我方現在行動"
+        g.mover = side
+    stats = {"prune": bool(prune), "budget_sec": budget_sec, "pruned": [], "timeout": [], "skipped": [],
+             "rollouts_run": 0, "rollouts_reused": 0}
+    opps = [(o, make_agent(o)) for o in opp_models]
+    memo = {}                                     # (計畫, 續行規格, 對手模型序號) → 推演結果
+    best = None                                   # 目前最佳大腦的 (最壞, 平均)
+    for i, b in enumerate(brains):
+        if deadline is not None and i > 0 and (stats["timeout"] or time.perf_counter() > deadline):
+            stats["skipped"].append(b)
+            continue
+        table_cont = b.get("_table_cont") if isinstance(b, dict) else None
+        if table_cont is not None:
+            b = {k: v for k, v in b.items() if k != "_table_cont"}
+        agent = make_agent(b)
+        table_agent = make_agent(table_cont) if table_cont is not None else agent
+        t0 = time.perf_counter()
+        if g.rules.burns_per_turn <= 1:
+            dv = g.clip_dv(side, agent.act(g, side))
+            plan = [(0.0, dv)]
+        else:
+            plan = plan_turn(g, agent)
+            dv = plan[0][1] if plan and plan[0][0] == 0.0 else np.zeros(3)
+        entry = {"brain": b, "decide_sec": time.perf_counter() - t0, "burn": burn_formats(g, side, dv),
+                 "plan": plan_formats(g, side, plan), "safe_after_burn": orbit_survives(g, side, dv),
+                 "rollouts": [],
+                 "plan_raw": [[float(o), np.asarray(d, dtype=np.float64).tolist()] for o, d in plan]}
+        out["advice"].append(entry)
+        if not rollouts:
+            continue
+        why = {"status": "complete"}
+        tkey = None
+        if isinstance(table_agent, RolloutPlanner):
+            tkey = (tuple((float(o), tuple(np.asarray(d, dtype=np.float64).tolist())) for o, d in plan),
+                    _spec_key(table_cont if table_cont is not None else b))
+        vals, wins = [], 0
+        for k, (name, oa) in enumerate(opps):
+            if tkey is not None and (tkey, k) in memo:
+                r = memo[(tkey, k)]
+                stats["rollouts_reused"] += 1
+            else:
+                thr = _prune_threshold(best, rank, len(opps) - (len(vals) - wins)) if prune else None
+                stop = _rollout_stop(side, thr, deadline, why) if (thr is not None or deadline is not None) else None
+                oa.reset(seed=0)
+                r = rollout(g, side, plan, table_agent, oa, stop=stop)
+                if r is None:
+                    break
+                stats["rollouts_run"] += 1
+                if tkey is not None:
+                    memo[(tkey, k)] = r
+            entry["rollouts"].append({"opponent": name, **r})
+            vals.append(_rollout_value(r, side))
+            wins += bool(r["we_win"])
+            if prune and best is not None and _beaten(best, rank, len(opps) - (len(vals) - wins), min(vals)):
+                why["status"] = "pruned"
+                break
+        entry["table_status"] = why["status"]
+        if why["status"] == "complete":
+            key = (min(vals), float(np.mean(vals)))
+            if rank == "wins":
+                key = (wins,) + key
+            if best is None or key > best:
+                best = key
+        else:
+            stats[why["status"]].append(b)
+    if rollouts:
+        done = [a for a in out["advice"] if a.get("table_status") == "complete"]
+        if done:
+            out["ranking"] = rank_advice(done, side, rank)
+    out["rank"] = rank
+    stats["elapsed_sec"] = time.perf_counter() - t_start
+    out["staged"] = stats
+    return out
 
 
 def print_advice(out, side):
@@ -296,9 +473,27 @@ def print_advice(out, side):
         for r in a["rollouts"]:
             print(f"    vs {str(r['opponent']):<40} → {r['outcome']:<14} {'WIN ' if r['we_win'] else 'LOSE'} "
                   f"t={r['t_end']:.0f}s  最近 {r['min_dist_km']:.1f} km  燃料用 P {r['used_pursuer_mps']:.0f} / E {r['used_evader_mps']:.0f}")
+        status = a.get("table_status")
+        if status == "pruned":
+            print("    （剪枝：推演已確定輸給目前最佳大腦的最壞情況，不可能是 ★，其餘推演略過）")
+        elif status == "timeout":
+            print("    （超過時間預算，推演表沒做完，不列入排序）")
+    st = out.get("staged")
+    if st:
+        msg = f"快速模式：用時 {st['elapsed_sec']:.1f}s"
+        if st.get("budget_sec") is not None:
+            msg += f"（預算 {st['budget_sec']:g}s）"
+        msg += f"；剪枝 {len(st['pruned'])} 個大腦、超時 {len(st['timeout'])} 個、跳過 {len(st['skipped'])} 個"
+        print("-" * 78)
+        print(msg)
+        for b in st["skipped"]:
+            print(f"  跳過（時間不夠）：{b}")
     if out.get("ranking"):
         print("=" * 78)
-        print("推演表排序（先比最壞情況、再比平均）：")
+        if out.get("rank") == "wins":
+            print("推演表排序（先比贏幾個對手模型、再比最壞情況、再比平均）：")
+        else:
+            print("推演表排序（先比最壞情況、再比平均）：")
         for i, row in enumerate(out["ranking"]):
             mark = "★ 推薦" if i == 0 else "      "
             print(f"  {mark} {str(row['brain']):<50} 贏 {row['wins']}/{row['n']} 個對手模型")
@@ -342,6 +537,12 @@ def main(argv=None):
     p.add_argument("--brains", default=None, help="逗號分隔 agent 規格（可含 sb3:path）")
     p.add_argument("--opponents", default=None, help="推演用的對手模型")
     p.add_argument("--no-rollout", action="store_true")
+    p.add_argument("--prune", action="store_true",
+                   help="剪掉不可能成為 ★ 的推演（★ 與完整推演相同，只是更快；推演表只列做完的）")
+    p.add_argument("--budget-sec", type=float, default=None,
+                   help="時間預算（秒）：超過就停，★ 只在推演表做完的大腦裡選（建議配 --prune）")
+    p.add_argument("--rank", default="worst", choices=["worst", "wins"],
+                   help="★ 排序：worst = 先比最壞再比平均（預設）、wins = 先比贏幾個對手模型")
     p.add_argument("--gmat", default=None, help="把第一個大腦的建議輸出成 GMAT 腳本")
     p.add_argument("--verify", action="store_true", help="用本機 GmatConsole 跑腳本並比對")
     p.add_argument("--json", default=None, help="完整結果另存 JSON")
@@ -384,7 +585,8 @@ def main(argv=None):
     if args.cmd == "advise":
         with open(args.path) as f:
             st = json.load(f)
-        out = advise(st, _parse_specs(args.brains), _parse_specs(args.opponents), not args.no_rollout)
+        out = advise(st, _parse_specs(args.brains), _parse_specs(args.opponents), not args.no_rollout,
+                     prune=args.prune, budget_sec=args.budget_sec, rank=args.rank)
         print_advice(out, st["role"])
         if args.json:
             with open(args.json, "w") as f:
