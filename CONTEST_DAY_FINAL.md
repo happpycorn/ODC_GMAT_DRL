@@ -30,7 +30,7 @@
 | 8 | 撞地/低於多少高度算輸？ | `crash_altitude_km` |
 | 9 | 指令怎麼輸入？座標系（EarthMJ2000Eq / VNB / LVLH）？單位（km/s？） | copilot 輸出 ECI km/s、VNB km/s、RSW m/s 三種，照官方選 |
 | 10 | 狀態怎麼給？（六根數 / 笛卡兒 / GMAT 報表）看得到對手的燃料嗎？ | 局勢檔 `elements` 或 `r_km/v_kms`；對手燃料看不到就填估計值 |
-| 11 | 每回合下指令有沒有時間限制？ | 決定能不能跑推演。實測（16 執行緒桌機，含程式啟動 ~4 s）：躲者完整 advise **~25 s**（4 個大腦 × 4 個對手模型，含 rollout 追者）、`--no-rollout` **~5 s**；時間很趕就 `--no-rollout` 或 `--opponents` 只留 1–2 個 |
+| 11 | 每回合下指令有沒有時間限制？ | 決定用哪個 advise 模式（E26，16 執行緒、`COPILOT_WORKERS=4`）：單發規則完整 advise 躲者 ~34 s／追者 ~28 s，`--prune`（★ 不變）14–18 s，`--no-rollout` 4–12 s；2 發規則 `--prune` 22–33 s。時限 T：≥ 60 s（2 發 ≥ 120 s）完整；25–60 s `--prune`；15–25 s `--prune --budget-sec T−5`；< 15 s 躲者 `--no-rollout`（直接用 lazy_evader）、追者 `--no-rollout --brains rollout_pursuer` |
 | 12 | 計分細節（只看勝負？還是距離/燃料/時間也算分？） | 影響燃料權重；copilot 的 rollout 會列燃料與時間 |
 
 ---
@@ -60,8 +60,10 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 1. **更新局勢檔**（`state.json`）：時間、雙方狀態、已用燃料、`mover`。
 2. **跑建議**：
    ```bash
-   uv run python copilot.py advise state.json                  # 戰況 + 各大腦建議 + 推演
-   uv run python copilot.py advise state.json --no-rollout     # 時間很趕時（~1 s）
+   export COPILOT_WORKERS=4 ODC_STRICT_SURVIVAL=1               # worker 開到 4 就不再變快（E26）；存活檢查修正（E25）
+   uv run python copilot.py advise state.json --prune          # 標準：戰況 + 各大腦建議 + 推演，★ 與完整版相同但快 2–4 倍
+   uv run python copilot.py advise state.json --prune --budget-sec 20   # 時間很趕：20 s 內用已算完的大腦排 ★
+   uv run python copilot.py advise state.json --no-rollout     # 非常趕（躲者直接照 lazy_evader）
    ```
 3. **看戰況三個數字**：
    - `純滑行最近接近`：< 捕獲半徑 → 追者**不用推**（省油），躲者**必須推**。
@@ -69,6 +71,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
    - `近地點高度` / `不推也安全`：任何一方 False → 那方不處理就會再入。
 4. **選建議**：copilot 最後會印「推演表排序」，**★ 推薦** 那個就是「對所有對手模型最壞結果最好」的大腦（drill 模式也預設採用它）。原則：採用推演結果「對最強對手模型（追者看 `dv_evader`/`escape_evader`、躲者看 `rollout_pursuer`）仍 WIN」的那個大腦；都 LOSE 就選最近距離最小（追者）/最大（躲者）的。
    彩排實證（docs/EXPERIMENTS.md E13）：躲者場 ★ 推薦開局兩回合自己選了「推滿逃逸」（escape_evader、RL 躲者），燃料用完才換 rollout，整場撐到時限獲勝——**信推演表排序，不要硬套單一大腦**。
+   ⚠️ **追者**：如果每個大腦都輸給同一個對手模型（例如對手是 lazy 型），★ 只在比「誰輸得比較近」——看推演表的「贏 x/n」，★ 不是 rollout 系、又贏得比 rollout_pursuer 少時，改用贏最多的那個，或加 `--rank wins`（E26）。
    ⚠️ 預設大腦（rollout）自己內部用的對手模型較弱，**它的第一建議不一定是推演表上最好的**——實測預設幾何下 rollout 躲者建議不動、推演對 rollout 追者 LOSE，而 `escape_evader` 推演 WIN。以推演表為準，不要只看第一個大腦。
 5. **先驗證再下**（時間允許）：
    ```bash

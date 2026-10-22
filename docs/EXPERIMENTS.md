@@ -482,3 +482,22 @@ Exploitability（我方勝率）：
   **flyby_pursuer 躲者撞地 30 → 0、30 局由「追者勝」翻成「躲者勝」**（sb3 躲者對 Lambert 7/0 p=0.016、對 rollout 10/0 p=0.002、對 sb3 追者 10/0 p=0.002）。沒有任何一局變差。
 - **決定**：**預設維持關**（夜間規矩：核心程式預設結果要逐位元不變）。子任務建議改成預設開（bug 修正、沒有測到壞處、copilot 的「推完安全」顯示才準）；改預設要同時更新兩個依賴舊行為的測試（見筆記）。**當天建議 `export ODC_STRICT_SURVIVAL=1` 再跑 copilot／彩排。**
 - **產物**：`docs/notes/orbit_survives_fix.md`、`reports/survfix_*.md`、`tests/test_orbit_survives_fix.py`。
+
+## E26 copilot ★ 整體策略評測、決策時間預算、2 發全攝動彩排（2026-10-22）
+- **copilot★ 當 agent**（`agents/copilot_agent.py`，`py:agents.copilot_agent:CopilotAgent`）：每回合呼叫 advise、照 ★ 下（多發照整窗計畫）。
+  copilot 新增可選功能（預設輸出不變）：`--prune`（★ 不變、只是比較快；16 個局勢比對 16/16 相同，躲者省 2.1–4.6 倍 CPU、追者 1.0–1.6 倍）、`--budget-sec`（時間到就用已算完的大腦排 ★）、`--rank wins`（先比贏幾個對手模型）。
+- **躲者**（ranking_like、seed 1、各 12 局）：copilot★ 與 lazy_evader 單獨**逐局相同**——對 rollout 追者 12/12、對強化版 rollout 追者 12/12；★ 在 1008/1008 次決策都選 lazy_evader。
+- **追者側、對稱 1500/3000 沒評測**（額度收斂）。抽查發現排序風險：所有大腦都會輸給某個對手模型時，「先比最壞」其實在比輸局的最近距離、不管贏幾個模型（例：開局 ★ 選了贏 2/4 的 RL 追者，rollout 追者贏 3/4）；8 個抽樣局勢有 7 個 ★ 是贏最多模型的大腦。`--rank wins` 已實作、沒大批驗證。
+- **決策時間**（16 執行緒、機器空、牆鐘秒、含程式啟動；開局狀態，中盤更短）：
+
+| 狀態 | 預設 w=1 | w=4 | w=8 | `--prune` w=8 | `--no-rollout` |
+|---|---|---|---|---|---|
+| 躲者開局，單發 | 46 | 34 | 32 | 14 | 4 |
+| 追者開局，單發 | 36 | 28 | 28 | 18 | 12 |
+| 躲者開局，2 發 | 111 | – | 71 | 22 | 4 |
+| 追者開局，2 發 | 96 | – | 78 | 33 | 18 |
+
+  worker 開到 4 就不再變快；第一次執行多 ~20 s（numba 暖機）。
+- **2 發全攝動彩排**（`reports/e26_rehearsal_full_lazy_evader_2burn.md`；ranking_like_2burn、near_coplanar seed 0、ranking_full、我方躲者照 ★、對手 rollout 追者——E17 裡這組規則 rollout 追者抓 rollout 躲者 83%）：**撐到時限（勝）**，GMAT 真實最近 13.111 km、全程沒進捕獲球；匯入差最大 16.7 m；決策平均 21.4 s、最長 56.4 s（完整 advise、4 worker）。
+- **結論**：當天躲者照 ★ 就是 lazy_evader；標準指令用 `--prune`、`COPILOT_WORKERS=4`。追者的 ★ 排序在「全輸給某模型」時不可靠，人工看「贏 x/n」。
+- **產物**：`docs/notes/copilot_eval.md`、`reports/copilot_evader_vs_*.md`、`tests/test_copilot_agent.py`。

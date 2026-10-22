@@ -73,3 +73,12 @@
 
 - `7d1821f` 系（rebase 後）：`ODC_STRICT_SURVIVAL` 開關；分支 worktree pytest 全綠後快轉；主 checkout 逐位元（default、ranking_like 各 36 局）與 `80dc622` 相同。
 - 開關打開：1,008 局中沒有任何一局變差；flyby_pursuer 30 局翻成躲者勝（不再自己撞地）。預設維持關（逐位元規矩），手冊前一晚清單加 `export ODC_STRICT_SURVIVAL=1`，改預設留給使用者決定。
+
+## 2026-10-22 13:10 合併 ⑤ copilot ★ 評測（E26）、收尾
+
+- ⑤ `d36aae5`、`5d4efb1`：`agents/copilot_agent.py`、copilot `--prune`／`--budget-sec`／`--rank wins`（預設輸出不變）；rebase 後分支 worktree pytest 186 項全綠再快轉。
+  躲者 copilot★ = lazy_evader（1008/1008），對 rollout／強化版追者 12/12；決策時間表與現場建議寫進手冊第二、四節。追者側沒評測（額度）。
+- 2 發全攝動彩排（lazy_evader 照 ★、對 rollout 追者）：撐到時限，GMAT 真實最近 13.1 km（`reports/e26_rehearsal_full_lazy_evader_2burn.md`）。
+- 速度基準：排位版 32 局混合配對 1 worker 183 s、4 worker 60 s（約 300 局／10 分鐘）。
+- 額度：11:00 撞到 5 小時 80% 暫停，12:40 重置後收尾。⑥ 太空船參數掃描、⑦ 自動風格辨識、⑧ sp4 **因額度上限未做**（見 OVERNIGHT_SUMMARY）。
+- 收尾：OVERNIGHT_SUMMARY 最終版、手冊與 ROADMAP 更新；所有研究分支已合併並刪除、worktree 清空。
