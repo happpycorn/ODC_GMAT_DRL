@@ -30,11 +30,70 @@ def safe_radius(game, margin_km=SAFETY_MARGIN_KM):
     return game.crash_radius + margin_km
 
 
-def orbit_survives(game, side, dv_eci_mps, horizon=None, margin_km=SAFETY_MARGIN_KM):
+STRICT_SURVIVAL_ENV = "ODC_STRICT_SURVIVAL"
+# 預設關 = 舊行為（逐位元不變）。開 = orbit_survives 在「近地點低於門檻、但剩餘時間內不經過近地點」時
+# 再檢查 horizon 結束時的二體半徑（docs/notes/orbit_survives_fix.md）。改預設是有意的行為改變。
+STRICT_SURVIVAL_DEFAULT = 0
+
+
+def strict_survival_enabled():
+    """ODC_STRICT_SURVIVAL 開關（evaluate.py 的子行程會繼承）：1 = orbit_survives 也檢查弧終點、0 = 舊行為；
+    未設定（或看不懂的值）時用 STRICT_SURVIVAL_DEFAULT。每次呼叫都重讀，只有漏判那一支會呼叫。"""
+    v = os.environ.get(STRICT_SURVIVAL_ENV, "").strip().lower()
+    if v in ("1", "true", "on", "yes"):
+        return True
+    if v in ("0", "false", "off", "no"):
+        return False
+    return bool(STRICT_SURVIVAL_DEFAULT)
+
+
+def _radius_after_coast(r, v, mu, dt):
+    """二體：從 (r, v) 純滑行 dt 秒後的地心距離（km）。給 orbit_survives「dt 內不經過近地點」那一支用；
+    比能量 >= 0 時（那一支代表正在往外飛，半徑單調增加）回傳 inf。純 float 運算（~10 µs）。"""
+    x, y, z = float(r[0]), float(r[1]), float(r[2])
+    vx, vy, vz = float(v[0]), float(v[1]), float(v[2])
+    r_mag = math.sqrt(x * x + y * y + z * z)
+    energy = (vx * vx + vy * vy + vz * vz) / 2.0 - mu / r_mag
+    if energy >= 0.0:
+        return math.inf
+    a = -mu / (2.0 * energy)
+    hx, hy, hz = y * vz - z * vy, z * vx - x * vz, x * vy - y * vx
+    e = math.sqrt(max(0.0, 1.0 + 2.0 * energy * (hx * hx + hy * hy + hz * hz) / (mu * mu)))
+    if e < 1e-12:
+        return r_mag                                  # 正圓：半徑不變
+    E0 = math.acos(min(1.0, max(-1.0, (1.0 - r_mag / a) / e)))
+    if x * vx + y * vy + z * vz < 0.0:
+        E0 = 2.0 * math.pi - E0                       # 正在往近地點掉（同 reaches_perigee）
+    M = (E0 - e * math.sin(E0) + math.sqrt(mu / (a * a * a)) * dt) % (2.0 * math.pi)
+    # Kepler 方程 E − e·sinE = M：f 單調遞增（f' = 1 − e·cosE > 0），Newton + [0, 2π] 夾擠，跳出區間就二分
+    lo, hi = 0.0, 2.0 * math.pi
+    E = min(hi, max(lo, M + 0.85 * e if math.sin(M) >= 0.0 else M - 0.85 * e))
+    for _ in range(64):
+        f = E - e * math.sin(E) - M
+        if f > 0.0:
+            hi = E
+        else:
+            lo = E
+        E_new = E - f / (1.0 - e * math.cos(E))
+        if not lo < E_new < hi:
+            E_new = 0.5 * (lo + hi)
+        if abs(E_new - E) < 1e-13:
+            E = E_new
+            break
+        E = E_new
+    return a * (1.0 - e * math.cos(E))
+
+
+def orbit_survives(game, side, dv_eci_mps, horizon=None, margin_km=SAFETY_MARGIN_KM, strict=None):
     """施加 dv 之後純滑行 horizon 秒（預設到 T_max）會不會掉到「撞地高度 + 安全裕度」以下。
 
     密切軌道近地點在門檻之上 → 安全；否則看剩餘時間內會不會真的飛過近地點
-    （同 Planner 的 reaches_perigee 分拆法，二體近似）。
+    （同 Planner 的 reaches_perigee 分拆法，二體近似）：會 → 不安全；不會 → 舊行為直接判安全。
+
+    strict（None = 跟 ODC_STRICT_SURVIVAL 開關，預設關）：不會飛過近地點時，這段弧的最低點是兩端取小
+    （reaches_perigee 說明裡的另一半），所以再要求 horizon 結束時的二體半徑也 ≥ 門檻。舊行為漏掉
+    「近地點在地底下、還沒到近地點就先穿過撞地高度」（E22 對稱規則 seed 1 第 3 局；E23 飛掠局的撞地）。
+    起點不檢查：推力改不了它，而且此刻還沒撞地。
 
     ⚠️ 安全裕度是 2026-09-15 對打評測抓到的：零裕度時追者把近地點壓在 101–110 km 高度
     （撞地線 100 km），二體判斷說安全，但 J2 讓近地點在幾圈內緩慢下沉，最後真的再入。
@@ -44,7 +103,11 @@ def orbit_survives(game, side, dv_eci_mps, horizon=None, margin_km=SAFETY_MARGIN
     h = game.time_left if horizon is None else horizon
     if check_constraints(r, v, game.mu, game.crash_radius + margin_km):
         return True
-    return not reaches_perigee(r, v, game.mu, h)
+    if reaches_perigee(r, v, game.mu, h):
+        return False
+    if not (strict_survival_enabled() if strict is None else strict):
+        return True                                   # 舊行為（ODC_STRICT_SURVIVAL=0）
+    return _radius_after_coast(r, v, game.mu, h) >= game.crash_radius + margin_km
 
 
 def rescue_burn(game, side):
