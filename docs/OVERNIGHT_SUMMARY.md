@@ -5,7 +5,7 @@
 
 ## 先決定這三件事
 1. **問主辦單位的問題清單加上：窗口多長、T_max 多長（若是飛掠：任務邊界）、一回合能下幾發、看不看得到對手燃料**，並決定要不要提早寄（草稿 `~/ODC_GMAT_Planner/docs/ranking/QUESTIONS_FOR_ORGANIZER.md`，還沒寄）。這幾個數字各自就能把勝負翻過來（E21、E23）。
-2. **要不要把 `ODC_STRICT_SURVIVAL` 改成預設開**（E25：修 `orbit_survives` 漏判，1,008 局沒有一局變差、30 局不再自己撞地）。夜裡照「核心程式預設結果逐位元不變」的規矩維持預設關；不改的話當天記得 `export ODC_STRICT_SURVIVAL=1`（已寫進手冊）。
+2. ~~要不要把 `ODC_STRICT_SURVIVAL` 改成預設開~~ → **已決定（2026-10-22）：預設開**（E25：修 `orbit_survives` 漏判，1,008 局沒有一局變差、30 局不再自己撞地）；要舊行為才設 `ODC_STRICT_SURVIVAL=0`。
 3. **追者的 ★ 排序要不要改成 `--rank wins`**（E26：所有大腦都輸給某個對手模型時，現行「先比最壞」只在比誰輸得比較近）。候選已實作、沒大批驗證；當天先人工看「贏 x/n」。
 
 ## 最重要的結論
@@ -17,7 +17,7 @@
 
 ## 當天怎麼打
 1. 規則公布：填 `configs/rules_final.json` → `uv run python tools/rule_lookup.py configs/rules_final.json`（幾秒）→ `evaluate.py` 在正式規則上實跑確認（手冊第三節）。
-2. 每回合：`export COPILOT_WORKERS=4 ODC_STRICT_SURVIVAL=1`，`copilot.py advise state.json --prune`（★ 跟完整版相同、快 2–4 倍）。
+2. 每回合：`export COPILOT_WORKERS=4`，`copilot.py advise state.json --prune`（★ 跟完整版相同、快 2–4 倍；存活檢查修正預設已開）。
 3. **躲者**：照 ★（= lazy_evader）。**追者**：rollout 追者；前幾回合對手躲者幾乎不推 → 照計分選次要目標（看對手耗油或不明 → `--brains` 加 `py:agents.pursuer_lab:HarassPursuer`；看最近距離 → rollout），不要先把自己的油燒光。
 4. 飛掠場景：躲者交會前一定要閃；追者只能等對手失誤。
 

@@ -60,7 +60,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 1. **更新局勢檔**（`state.json`）：時間、雙方狀態、已用燃料、`mover`。
 2. **跑建議**：
    ```bash
-   export COPILOT_WORKERS=4 ODC_STRICT_SURVIVAL=1               # worker 開到 4 就不再變快（E26）；存活檢查修正（E25）
+   export COPILOT_WORKERS=4                                     # worker 開到 4 就不再變快（E26）；存活檢查修正 ODC_STRICT_SURVIVAL 預設已開（E25），要舊行為才設 0
    uv run python copilot.py advise state.json --prune          # 標準：戰況 + 各大腦建議 + 推演，★ 與完整版相同但快 2–4 倍
    uv run python copilot.py advise state.json --prune --budget-sec 20   # 時間很趕：20 s 內用已算完的大腦排 ★
    uv run python copilot.py advise state.json --no-rollout     # 非常趕（躲者直接照 lazy_evader）
@@ -161,7 +161,7 @@ uv run python evaluate.py --rules configs/rules_final.json --scenario mixed --ga
 ## 八、前一晚準備
 
 - [ ] 兩台筆電 `git pull && uv sync && uv run pytest`（全綠，含 GMAT 重播測試）
-- [ ] 當天的 shell 先 `export ODC_STRICT_SURVIVAL=1`（修正 `orbit_survives` 對「近地點在地底、還沒到近地點就先撞地」的漏判；預設還是關，E25）
+- [ ] 確認沒有殘留 `ODC_STRICT_SURVIVAL=0`：`orbit_survives` 漏判修正（近地點在地底、還沒到近地點就先撞地）**預設已開**（E25，2026-10-22 使用者決定），要舊行為才設 0
 - [ ] 各跑一場彩排：`uv run python tools/dress_rehearsal.py --role pursuer` 與 `--role evader`（GMAT 當真實世界，確認整條流程與每回合耗時；參考值：決策平均 1.5–3.9 s、最長 ~14 s）
 - [ ] 用正式規則加全攝動再各跑一場：`--rules configs/rules_final.json --force-model ranking_full`（GMAT 用排位賽官方模型當真實世界、每回合把引擎重設成 GMAT 狀態，賽後並列 GMAT 與引擎的勝負判定；E18）
 - [ ] `uv run python copilot.py drill --role pursuer` 與 `--role evader` 各跑一場（預熱 numba 快取）

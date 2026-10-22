@@ -43,7 +43,7 @@
 - [x] 雙曲線／飛掠幾何（E23，HAP-121）：引擎、copilot、匯入、GMAT 支援雙曲線；飛掠場景躲者壓倒性有利
 - [x] 追者反制「受威脅才閃」的躲者（E24，HAP-122）：排位版數字下抓不到（結構性）；HarassPursuer 逼它多耗一倍油
 - [x] `orbit_survives` 漏判修正（E25）：開關 `ODC_STRICT_SURVIVAL`，預設關
-- [ ] 決定 `ODC_STRICT_SURVIVAL` 要不要改成預設開（1,008 局沒有一局變差；要同時改兩個依賴舊行為的測試）
+- [x] `ODC_STRICT_SURVIVAL` 改成預設開（2026-10-22 使用者決定；設 0 回舊行為）
 - [x] copilot ★ 整體評測與決策時間預算（E26）：躲者 ★ = lazy_evader；`--prune`、`--budget-sec`、`--rank wins`；現場 `COPILOT_WORKERS=4`
 - [ ] 追者 ★ 排序：`--rank wins` 大批驗證（E26 發現「全輸給某模型」時排序不可靠）
 - [ ] 全攝動彩排擴大：太空船參數（Cd·A/m）掃描、多幾何（夜間因額度上限只做了 2 場，E22/E26）

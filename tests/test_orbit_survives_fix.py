@@ -1,4 +1,4 @@
-"""orbit_survives 末端半徑檢查（開關 ODC_STRICT_SURVIVAL，預設關；docs/notes/orbit_survives_fix.md）。
+"""orbit_survives 末端半徑檢查（開關 ODC_STRICT_SURVIVAL，預設開——2026-10-22 使用者決定；docs/notes/orbit_survives_fix.md）。
 
 舊行為：近地點低於「撞地高度 + 裕度」時只問剩餘時間內會不會飛過近地點，不會就判安全——漏掉
 「近地點在地底下、還沒到近地點就先穿過撞地高度」。開關開（或 strict=True）時再檢查 horizon 末端的二體半徑。
@@ -34,19 +34,19 @@ def _coast_out(g, side, dv):
 
 
 # ------------------------------------------------------------------ 開關
-def test_switch_default_is_old_behavior(monkeypatch):
+def test_switch_default_is_on(monkeypatch):
     monkeypatch.delenv(ENV, raising=False)
-    assert an.STRICT_SURVIVAL_DEFAULT == 0           # 改預設是有意的行為改變：要一起改這行與筆記
-    assert strict_survival_enabled() is False
-    for val, want in (("1", True), ("on", True), ("true", True), ("0", False), ("off", False), ("", False),
-                      ("看不懂", False)):
+    assert an.STRICT_SURVIVAL_DEFAULT == 1           # 2026-10-22 使用者決定預設開（E25）；ODC_STRICT_SURVIVAL=0 回舊行為
+    assert strict_survival_enabled() is True
+    for val, want in (("1", True), ("on", True), ("true", True), ("0", False), ("off", False), ("", True),
+                      ("看不懂", True)):
         monkeypatch.setenv(ENV, val)
         assert strict_survival_enabled() is want, val
-    monkeypatch.setattr(an, "STRICT_SURVIVAL_DEFAULT", 1)
+    monkeypatch.setattr(an, "STRICT_SURVIVAL_DEFAULT", 0)
     monkeypatch.delenv(ENV)
-    assert strict_survival_enabled() is True
-    monkeypatch.setenv(ENV, "0")                     # 環境變數優先於模組常數
     assert strict_survival_enabled() is False
+    monkeypatch.setenv(ENV, "1")                     # 環境變數優先於模組常數
+    assert strict_survival_enabled() is True
 
 
 # ------------------------------------------------------------------ E22：對稱規則尾聲的大推力閃避
@@ -71,7 +71,7 @@ def test_e22_crash_before_underground_perigee(monkeypatch):
     monkeypatch.setenv(ENV, "0")
     assert orbit_survives(g, "evader", dv)
     monkeypatch.delenv(ENV)
-    assert orbit_survives(g, "evader", dv)                             # 預設 = 舊行為
+    assert not orbit_survives(g, "evader", dv)                         # 預設開（2026-10-22）= 修正後行為
     assert _coast_out(g, "evader", dv) == "crash_evader"               # 引擎真的撞地
     for strict in (False, True):                                       # 不推：兩邊都安全
         assert orbit_survives(g, "evader", np.zeros(3), strict=strict)

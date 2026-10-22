@@ -316,12 +316,13 @@ def test_gmat_replay_matches_engine_on_flyby(deg):
 
 
 @GMAT
-def test_gmat_full_perturbation_flyby_pursuer_runs():
+def test_gmat_full_perturbation_flyby_pursuer_runs(monkeypatch):
     """全攝動（排位賽官方模型）重播雙曲線追者：跑得完、落差在公里級以內、密集判定可用（只下前 3000 s 省時間）。
 
     這局 LEO 躲者（dv_evader_fast）在 2453 s 自己撞地（agents.analytic.orbit_survives 沒檢查弧終點，見
     docs/notes/flyby_geometry.md）：gmat_truth 不能把撞地後的窗口補滿，否則 GMAT 在大氣層裡積分 2 分多鐘。"""
     from tools.gmat_verify import gmat_truth, verify_game
+    monkeypatch.setenv("ODC_STRICT_SURVIVAL", "0")   # 這局要重現舊行為的撞地（E25 預設開之後不會撞）
     g = _played_flyby(2, "flyby_pursuer", t_max_sec=3000.0)
     assert specific_energy(*g.initial["pursuer"]) > 0.0 and len(g.history) >= 5
     assert g.outcome == "crash_evader"

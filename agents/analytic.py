@@ -31,9 +31,10 @@ def safe_radius(game, margin_km=SAFETY_MARGIN_KM):
 
 
 STRICT_SURVIVAL_ENV = "ODC_STRICT_SURVIVAL"
-# 預設關 = 舊行為（逐位元不變）。開 = orbit_survives 在「近地點低於門檻、但剩餘時間內不經過近地點」時
-# 再檢查 horizon 結束時的二體半徑（docs/notes/orbit_survives_fix.md）。改預設是有意的行為改變。
-STRICT_SURVIVAL_DEFAULT = 0
+# 預設開（2026-10-22 使用者決定，E25）：orbit_survives 在「近地點低於門檻、但剩餘時間內不經過近地點」時
+# 再檢查 horizon 結束時的二體半徑（docs/notes/orbit_survives_fix.md）。ODC_STRICT_SURVIVAL=0 回到舊行為
+# （舊行為與 2026-10-21 以前的結果逐位元相同）。
+STRICT_SURVIVAL_DEFAULT = 1
 
 
 def strict_survival_enabled():
@@ -90,7 +91,7 @@ def orbit_survives(game, side, dv_eci_mps, horizon=None, margin_km=SAFETY_MARGIN
     密切軌道近地點在門檻之上 → 安全；否則看剩餘時間內會不會真的飛過近地點
     （同 Planner 的 reaches_perigee 分拆法，二體近似）：會 → 不安全；不會 → 舊行為直接判安全。
 
-    strict（None = 跟 ODC_STRICT_SURVIVAL 開關，預設關）：不會飛過近地點時，這段弧的最低點是兩端取小
+    strict（None = 跟 ODC_STRICT_SURVIVAL 開關，預設開）：不會飛過近地點時，這段弧的最低點是兩端取小
     （reaches_perigee 說明裡的另一半），所以再要求 horizon 結束時的二體半徑也 ≥ 門檻。舊行為漏掉
     「近地點在地底下、還沒到近地點就先穿過撞地高度」（E22 對稱規則 seed 1 第 3 局；E23 飛掠局的撞地）。
     起點不檢查：推力改不了它，而且此刻還沒撞地。

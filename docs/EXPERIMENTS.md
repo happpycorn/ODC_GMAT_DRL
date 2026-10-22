@@ -474,13 +474,13 @@ Exploitability（我方勝率）：
 - **限制**：門檻不同的 lazy 變體、追者燃料 6000、強化版 rollout、兩發組合規劃沒做；多發規則下 LazyHunter 的偵測不會觸發。
 - **產物**：`docs/notes/pursuer_vs_lazy.md`、`reports/plazy_*.md`、`tests/test_pursuer_lab.py`。
 
-## E25 `orbit_survives` 漏判修正（開關，預設關；2026-10-22）
+## E25 `orbit_survives` 漏判修正（開關；2026-10-22 起預設開）
 - **問題**：近地點低於「撞地高度 + 50 km」但剩餘時間內到不了近地點時，`orbit_survives` 直接判安全；近地點在地底時太空船其實還沒到近地點就先撞地（E22、E23 各自踩到）。
 - **修法**（`agents/analytic.py`）：開關打開時，這種情況再要求 horizon 結束時的半徑（二體 Kepler 解析，~8 µs）≥ 撞地高度 + 50 km。開關：環境變數 `ODC_STRICT_SURVIVAL`（0/1）、模組常數 `STRICT_SURVIVAL_DEFAULT = 0`、參數 `strict=`。1,544 個漏判區隨機案例中引擎真的會撞的 618 個：舊判斷全放過、新判斷 0 放過；二體與 J2 末端半徑差 ≤ 44.8 km（在 50 km 裕度內）。
 - **開關關**：default／ranges／ranking_like 各 36 局逐位元相同（子任務 worktree）；合併後主 checkout 另驗。
 - **開 vs 關**（seed 1、每配對 24 局、共 1,008 局逐局配對）：ranking_like、symmetric 撞地 0 → 0、勝負不變；flyby 追者撞地 64 → 0（都是已經追不到之後撞的，勝負不變）；
   **flyby_pursuer 躲者撞地 30 → 0、30 局由「追者勝」翻成「躲者勝」**（sb3 躲者對 Lambert 7/0 p=0.016、對 rollout 10/0 p=0.002、對 sb3 追者 10/0 p=0.002）。沒有任何一局變差。
-- **決定**：**預設維持關**（夜間規矩：核心程式預設結果要逐位元不變）。子任務建議改成預設開（bug 修正、沒有測到壞處、copilot 的「推完安全」顯示才準）；改預設要同時更新兩個依賴舊行為的測試（見筆記）。**當天建議 `export ODC_STRICT_SURVIVAL=1` 再跑 copilot／彩排。**
+- **決定**：夜間先維持預設關（核心程式預設結果要逐位元不變的規矩），**2026-10-22 使用者決定改成預設開**（`STRICT_SURVIVAL_DEFAULT = 1`；bug 修正、沒有測到壞處、copilot 的「推完安全」顯示才準）。`ODC_STRICT_SURVIVAL=0` 回到舊行為，與改前逐位元相同；依賴舊行為的兩個測試改成明確指定 `strict=False`／`ODC_STRICT_SURVIVAL=0`。**E26 以前的評測數字都是在舊行為（關）下量的**；E25 表格顯示 ranking_like／symmetric 下只有少數局的細節不同、勝負不變，飛掠場景差在撞地局。
 - **產物**：`docs/notes/orbit_survives_fix.md`、`reports/survfix_*.md`、`tests/test_orbit_survives_fix.py`。
 
 ## E26 copilot ★ 整體策略評測、決策時間預算、2 發全攝動彩排（2026-10-22）

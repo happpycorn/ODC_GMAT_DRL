@@ -80,7 +80,8 @@ def test_strict_survives_catches_crash_before_perigee():
     g = Game.from_elements(sym, NEAR_P, e600)
     g.play_turn(np.zeros(3))                           # 追者回合；輪到躲者，剩 1350 s
     dv = rsw_to_eci_dv(g, "evader", np.array([-1061.0, -1061.0, 0.0]))
-    assert orbit_survives(g, "evader", dv)             # 舊檢查的漏判
+    assert orbit_survives(g, "evader", dv, strict=False)   # 舊檢查（ODC_STRICT_SURVIVAL=0）的漏判
+    assert not orbit_survives(g, "evader", dv)         # 預設開（E25）已修正
     assert not strict_survives(g, "evader", dv)
     assert strict_survives(g, "evader", np.zeros(3))
     h = g.clone()

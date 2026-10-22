@@ -82,3 +82,10 @@
 - 速度基準：排位版 32 局混合配對 1 worker 183 s、4 worker 60 s（約 300 局／10 分鐘）。
 - 額度：11:00 撞到 5 小時 80% 暫停，12:40 重置後收尾。⑥ 太空船參數掃描、⑦ 自動風格辨識、⑧ sp4 **因額度上限未做**（見 OVERNIGHT_SUMMARY）。
 - 收尾：OVERNIGHT_SUMMARY 最終版、手冊與 ROADMAP 更新；所有研究分支已合併並刪除、worktree 清空。
+
+## 2026-10-22 13:50 `ODC_STRICT_SURVIVAL` 改成預設開（使用者決定）
+
+- `STRICT_SURVIVAL_DEFAULT = 1`；`ODC_STRICT_SURVIVAL=0` 回舊行為。依賴舊行為的測試改成明確指定 `strict=False`／`ODC_STRICT_SURVIVAL=0`，開關測試改驗預設開。
+- 驗證：pytest 186 項全綠；設 0 時逐位元（default／ranking_like／ranking_like_2burn 各 36 局）與 `80dc622` 完全相同；
+  預設開（新基準）108 局中 5 局細節不同、1 局勝負翻轉（ranking_like_2burn rollout 追者 vs escape_evader 第 3 局 timeout → capture）。
+- 手冊、E25、OVERNIGHT_SUMMARY、ROADMAP、筆記改成「預設已開；要舊行為才設 0」。

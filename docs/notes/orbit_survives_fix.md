@@ -1,5 +1,7 @@
 # orbit_survives 漏判修正：弧終點半徑檢查（開關 ODC_STRICT_SURVIVAL，2026-10-22）
 
+> **2026-10-22 更新**：使用者決定改成**預設開**（`STRICT_SURVIVAL_DEFAULT = 1`）；`ODC_STRICT_SURVIVAL=0` 回到舊行為（與改前逐位元相同）。下文寫的「預設關」是當時的狀態。
+
 ## 1. 問題
 `agents/analytic.py::orbit_survives` 在密切近地點低於「撞地高度 + 50 km」時只問「剩餘時間內會不會飛過近地點」，
 不會就判安全。近地點在地底下時，太空船**還沒到近地點就先穿過撞地高度**——`physics/core_math.py::reaches_perigee`
