@@ -43,19 +43,23 @@ def write_report(workdir, n, t, state):
     return path
 
 
-def gmat_report_now(game, workdir, force_model="zonal"):
-    """GMAT 重播目前歷程，把最後一列寫成帶表頭的報表檔，回傳路徑。沒有歷程時直接寫初始狀態。"""
-    from tools.gmat_verify import game_to_script, run_gmat
+def gmat_report_now(game, workdir, force_model="zonal", **gmat_options):
+    """GMAT 重播目前歷程，回傳（帶表頭報表路徑，軌跡判定）；無歷程時分析初始狀態。"""
+    from tools.gmat_verify import GMAT_CONSOLE, analyze_dense, game_to_script, run_gmat
+    console = gmat_options.pop("console", GMAT_CONSOLE)
     if game.history:
-        rows = run_gmat(game_to_script(game, "__REPORT__", force_model))
+        rows, dense = run_gmat(game_to_script(game, "__REPORT__", force_model, dense_path="__DENSE__",
+                                             **gmat_options), console, dense=True)
         last = rows[-1]
     else:
         (rp, vp), (re, ve) = game.initial["pursuer"], game.initial["evader"]
         last = np.concatenate([[0.0], rp, vp, re, ve])
+        rows, dense = last[None, :], last[None, :]
+    gate = analyze_dense(dense, game.rules.capture_radius_km, rules=game.rules, capture_times_sec=rows[:, 0])
     path = os.path.join(workdir, f"gmat_turn{len(game.history):03d}.txt")
     with open(path, "w") as f:
         f.write(HEADER + "\n" + " ".join(f"{x:.12f}" for x in last) + "\n")
-    return path
+    return path, gate
 
 
 def main():
@@ -64,6 +68,7 @@ def main():
     from game.core import Game, plan_turn
     from game.rules import RuleRanges, Rules
     from game.scenarios import sample_scenario
+    from tools.gmat_verify import DEFAULT_EPOCH_TAI_MJD, GMAT_CONSOLE, earth_gate_lines
 
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--role", default="pursuer", choices=["pursuer", "evader"])
@@ -75,11 +80,17 @@ def main():
     ap.add_argument("--opponents", default=None, help="copilot 推演用的對手模型（逗號分隔）")
     ap.add_argument("--max-turns", type=int, default=0, help="> 0 時只彩排前 N 回合")
     ap.add_argument("--name", default=None)
+    ap.add_argument("--record-out", help="另存可供 gmat_sensitivity 重播的完整 JSON 紀錄")
+    ap.add_argument("--gmat-console", default=GMAT_CONSOLE)
+    ap.add_argument("--spacecraft-json", help="共用太空船參數覆寫 JSON")
+    ap.add_argument("--epoch-tai-mjd", type=float, default=DEFAULT_EPOCH_TAI_MJD)
     ap.add_argument("--force-model", default="zonal", choices=["zonal", "ranking_full"],
                     help="GMAT（真實世界）的力學模型")
     ap.add_argument("--resync", default="auto", choices=["auto", "on", "off"],
                     help="每回合把引擎狀態重設成 GMAT 狀態（auto = ranking_full 才開）")
     args = ap.parse_args()
+    gmat_options = {"console": args.gmat_console, "epoch_tai_mjd": args.epoch_tai_mjd,
+                    "spacecraft": json.load(open(args.spacecraft_json)) if args.spacecraft_json else None}
     resync = args.resync == "on" or (args.resync == "auto" and args.force_model != "zonal")
 
     rng = np.random.default_rng(args.seed)
@@ -102,6 +113,8 @@ def main():
     # ranking_full：GMAT 逐回合推進（從上回合的 GMAT 狀態跑一個窗口），不再每回合從頭重播
     incremental = args.force_model != "zonal"
     truth_state = {s_: (g.initial[s_][0].copy(), g.initial[s_][1].copy()) for s_ in ("pursuer", "evader")}
+    states_before, step_gates = [], []
+    advanced_turns = 0
     with tempfile.TemporaryDirectory(prefix="rehearsal_") as wd:
         state_path = os.path.join(wd, "state.json")
         copilot.main(["init", state_path])
@@ -110,11 +123,17 @@ def main():
             if incremental:
                 if g.history:
                     from tools.gmat_verify import gmat_step
-                    truth_state = gmat_step(R, truth_state, g.history[-1], args.force_model)
+                    truth_state, gate = gmat_step(R, truth_state, g.history[-1], args.force_model,
+                                                  with_analysis=True, **gmat_options)
+                    advanced_turns = len(g.history)
+                    step_gates.append(gate)
                 rep = write_report(wd, len(g.history), g.t, truth_state)
             else:
-                rep = gmat_report_now(g, wd, args.force_model)
+                rep, gate = gmat_report_now(g, wd, args.force_model, **gmat_options)
             t_gmat = time.perf_counter() - t0
+            if g.history and gate["first_event"] is not None:
+                print("\n".join(earth_gate_lines(gate)), flush=True)
+                break  # GMAT 已發生終局事件，不再對事件後狀態做決策
             copilot.main(["import", state_path, rep, "--pursuer-ship", "ShipP", "--evader-ship", "ShipE",
                           "--mover", g.mover, "--fuel-used", str(g.used["pursuer"]), str(g.used["evader"])])
             st = json.load(open(state_path))
@@ -126,6 +145,7 @@ def main():
             if resync:                                                   # 帳本跟真實世界同步
                 for s_ in ("pursuer", "evader"):
                     g.set_state(s_, truth.r(s_), truth.v(s_))
+            states_before.append({s_: (g.r(s_).copy(), g.v(s_).copy()) for s_ in ("pursuer", "evader")})
 
             t1 = time.perf_counter()
             if g.mover == side:
@@ -153,15 +173,18 @@ def main():
 
         final = None
         if g.history and incremental:
-            from tools.gmat_verify import gmat_step
-            truth_state = gmat_step(R, truth_state, g.history[-1], args.force_model)
+            if advanced_turns < len(g.history):
+                from tools.gmat_verify import gmat_step
+                truth_state, gate = gmat_step(R, truth_state, g.history[-1], args.force_model,
+                                              with_analysis=True, **gmat_options)
+                step_gates.append(gate)
             final = write_report(wd, len(g.history), g.t, truth_state)
         elif g.history:
-            final = gmat_report_now(g, wd, args.force_model)
+            final, gate = gmat_report_now(g, wd, args.force_model, **gmat_options)
         truth_all = None
-        if g.history and args.force_model != "zonal":
+        if g.history:
             from tools.gmat_verify import gmat_truth
-            truth_all = gmat_truth(g, args.force_model)
+            truth_all = gmat_truth(g, args.force_model, **gmat_options)
         if final:
             vals = np.loadtxt(final, skiprows=1)
             d_gmat = float(np.linalg.norm(vals[1:4] - vals[7:10]))
@@ -170,6 +193,7 @@ def main():
 
     s = g.summary()
     name = args.name or f"rehearsal_{side}_{args.seed}"
+    engine_result = f"{s['outcome']}（{g.winner} 勝）" if g.winner else "尚未終局"
     lines = [f"# 當天流程彩排 {name}", "",
              f"- 我方 {side}、對手 `{opp.name}`、規則 `{args.rules}`、幾何 `{sc.family}`、seed {args.seed}、"
              f"推演 {'關' if args.no_rollout else '開'}",
@@ -177,10 +201,10 @@ def main():
              f"{s['turns']} 回合，t = {s['t_end']:.0f} s，最近距離 {s['min_dist_km']:.2f} km",
              f"- 最終距離：引擎 {g.distance():.4f} km / GMAT {d_gmat:.4f} km",
              f"- GMAT 力學模型 `{args.force_model}`、每回合重設引擎狀態 {'開' if resync else '關'}",
-             *([f"- **GMAT 真實軌跡判定**：最近距離 {truth_all['d_min_km']:.3f} km @ t={truth_all['t_min_sec']:.0f} s；"
-                + (f"t={truth_all['t_capture_sec']:.0f} s 進捕獲球（追者勝）" if truth_all['t_capture_sec'] is not None
-                   else "全程沒進捕獲球（躲者勝）")
-                + f"；引擎判定 {s['outcome']}（{g.winner} 勝）"] if truth_all else []),
+             *([f"- **GMAT 真實軌跡判定**：幾何最近距離 {truth_all['d_min_km']:.3f} km @ t={truth_all['t_min_sec']:.0f} s；"
+                f"最早事件 {truth_all['first_event'] or '無'}；引擎判定 {engine_result}",
+                *[f"- **{line}**" if "【撞地" in line else f"- {line}" for line in earth_gate_lines(truth_all)]]
+               if truth_all else []),
              f"- 匯入狀態 vs 引擎最大差：{max((r['import_vs_engine_m'] for r in log), default=0):.2f} m",
              f"- 我方決策耗時：平均 {np.mean([r['decide_sec'] for r in log if r['side'] == side] or [0]):.1f} s、"
              f"最長 {max([r['decide_sec'] for r in log if r['side'] == side] or [0]):.1f} s；"
@@ -192,9 +216,20 @@ def main():
         lines.append(f"| {r['turn']} | {r['side']} | {r['who']} | {r['dv_mps']:.1f} | {r['gmat_sec']:.1f} | "
                      f"{r['decide_sec']:.1f} | {r['import_vs_engine_m']:.2f} | {r['distance_km']:.2f} | {r['outcome'] or ''} |")
     os.makedirs("reports", exist_ok=True)
+    if args.record_out:
+        from tools.gmat_sensitivity import save_record
+        save_record(g, args.record_out, states_before=states_before,
+                    source={"kind": "dress_rehearsal", "rules_path": args.rules, "scenario": args.scenario,
+                            "seed": args.seed, "role": side, "opponent": args.opponent,
+                            "force_model": args.force_model, "resync": resync,
+                            "spacecraft": gmat_options["spacecraft"], "epoch_tai_mjd": args.epoch_tai_mjd,
+                            "gmat_step_gates": step_gates,
+                            "note": "彩排當下保存的完整機動與各窗口起始狀態。"})
     with open(f"reports/{name}.md", "w") as f:
         f.write("\n".join(lines) + "\n")
-    print("\n".join(lines[:9]))
+    print("\n".join(lines[:next(i for i, line in enumerate(lines) if line.startswith('| 回合'))]))
+    if args.record_out:
+        print(f"→ 可重播紀錄 {args.record_out}")
     print(f"→ reports/{name}.md")
 
 

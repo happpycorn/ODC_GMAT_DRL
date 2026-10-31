@@ -610,7 +610,7 @@ def main(argv=None):
             with open(args.json, "w") as f:
                 json.dump(out, f, indent=2, default=float, ensure_ascii=False)
         if args.gmat and out["advice"]:
-            from tools.gmat_verify import game_to_script, verify_game
+            from tools.gmat_verify import earth_gate_lines, game_to_script, verify_game
             g = game_from_state(st)
             g.mover = st["role"]
             fresh = Game(g.rules.with_(t_max_sec=g.t + g.next_window() + 1.0), g.r("pursuer"), g.v("pursuer"),
@@ -625,6 +625,8 @@ def main(argv=None):
                 v = verify_game(fresh)
                 print(f"  GMAT 比對：位置差 {1000 * v['max_dpos_km']:.2f} m、窗口末距離 ours/GMAT = "
                       f"{v['final_dist_ours_km']:.4f} / {v['final_dist_gmat_km']:.4f} km")
+                for line in earth_gate_lines(v):
+                    print("  " + line)
         return 0
 
     if args.cmd == "drill":

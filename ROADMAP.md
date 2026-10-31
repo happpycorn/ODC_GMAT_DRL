@@ -46,7 +46,8 @@
 - [x] `ODC_STRICT_SURVIVAL` 改成預設開（2026-10-22 使用者決定；設 0 回舊行為）
 - [x] copilot ★ 整體評測與決策時間預算（E26）：躲者 ★ = lazy_evader；`--prune`、`--budget-sec`、`--rank wins`；現場 `COPILOT_WORKERS=4`
 - [ ] 追者 ★ 排序：`--rank wins` 大批驗證（E26 發現「全輸給某模型」時排序不可靠）
-- [ ] 全攝動彩排擴大：太空船參數（Cd·A/m）掃描、多幾何（夜間因額度上限只做了 2 場，E22/E26）
+- [x] GMAT 獨立撞地閘門、太空船參數／曆元敏感度工具與整場 dry-run（[操作與紀錄](docs/notes/gmat_sensitivity.md)）
+- [ ] 全攝動彩排擴大：太空船參數（Cd·A/m）／曆元掃描實跑、多幾何（工具已完成；E22 設定的 78 回合 × 15 變體 dry-run 已產生，GMAT 實測待沙盒外執行）
 - [ ] 排位版規則重訓 RL（sp4，HAP-123；夜間因額度上限未開始）
 - [ ] 真正的兩發規劃：rollout 候選列舉 (第一發, 第二發) 組合（E17/E20 的限制）
 - [ ] 規則地圖補跑：強化版 rollout 追者各格、`RankingRuleRanges` 分布平均（E21 未跑）
