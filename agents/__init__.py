@@ -8,6 +8,10 @@
 """
 import importlib
 
+from runtime_threads import limit_blas_threads
+
+limit_blas_threads()  # 直接使用 agents.rollout 時，base 匯入 numpy 前也要固定。
+
 from agents.base import Agent, CallableAgent, CoastAgent, PoolAgent, RandomAgent
 from agents.analytic import DvEvader, EscapeEvader, LambertPursuer
 from agents.search import MinimaxEvader, MinimaxPursuer

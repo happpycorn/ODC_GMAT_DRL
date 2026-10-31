@@ -29,11 +29,17 @@ import math
 import os
 import sys
 import time
+from functools import wraps
+
+from runtime_threads import limit_blas_threads
+
+limit_blas_threads()  # 在 numpy／agents 匯入之前設定，spawn 子行程也會繼承。
 
 import numpy as np
 
 from agents import make_agent
 from agents.analytic import need_horizon, orbit_survives, pursuer_need
+from agents.scan_reuse import decision_scope, scan_reuse_enabled
 from game.core import Game, plan_turn, take_turn
 from game.rules import Rules, other
 from game.scenarios import DEFAULT_ORBIT_EVADER, DEFAULT_ORBIT_PURSUER, sample_scenario
@@ -214,6 +220,18 @@ def default_brains(side, workers=None):
     return brains
 
 
+def _advice_scan_scope(func):
+    @wraps(func)
+    def scoped(st, *args, **kwargs):
+        if not scan_reuse_enabled():
+            return func(st, *args, **kwargs)
+        # 根局勢的大腦共用；各條推演遇到其他狀態時由 act / _candidates 另開範圍。
+        with decision_scope(game_from_state(st)):
+            return func(st, *args, **kwargs)
+    return scoped
+
+
+@_advice_scan_scope
 def advise(st, brains=None, opp_models=None, rollouts=True, log=print, *, prune=False, budget_sec=None,
            workers=None, with_situation=True, rank="worst"):
     """預設（prune=False、budget_sec=None）：每個大腦的建議 × 每個對手模型推演到終局，全部做完再排序。

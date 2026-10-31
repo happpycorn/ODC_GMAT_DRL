@@ -15,9 +15,12 @@ import json
 import math
 from concurrent.futures import ProcessPoolExecutor
 
+from runtime_threads import limit_blas_threads
+
 import numpy as np
 
 from agents.base import Agent, rsw_to_eci_dv
+from agents.scan_reuse import reset_scan_reuse, scoped_decision
 from game.core import take_turn
 
 DEFAULTS = {
@@ -72,11 +75,16 @@ def _rollout_task(args):
     return play_out(game, dv, side, _worker_agent(cont_spec), _worker_agent(opp_spec))
 
 
+def _initialize_worker():
+    limit_blas_threads()
+    reset_scan_reuse()
+
+
 def _pool(n):
     if _POOL["pool"] is None or _POOL["n"] != n:
         if _POOL["pool"] is not None:
             _POOL["pool"].shutdown(cancel_futures=True)
-        _POOL["pool"] = ProcessPoolExecutor(max_workers=n)
+        _POOL["pool"] = ProcessPoolExecutor(max_workers=n, initializer=_initialize_worker)
         _POOL["n"] = n
     return _POOL["pool"]
 
@@ -98,6 +106,7 @@ class RolloutPlanner(Agent):
         self.workers = int(workers)
         self.name = name or f"rollout_{side}"
 
+    @scoped_decision
     def _candidates(self, game):
         cands = [np.zeros(3)]
         for a in self.cand_agents:

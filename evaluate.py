@@ -13,6 +13,10 @@ import datetime
 import json
 import os
 
+from runtime_threads import limit_blas_threads
+
+limit_blas_threads()
+
 from evaluation.tournament import make_games, markdown_report, run_tournament
 
 

@@ -17,6 +17,7 @@ from itertools import product
 import numpy as np
 
 from agents.base import Agent, rsw_to_eci_dv
+from agents.scan_reuse import reuse_call, scoped_decision
 from physics.coast import closest_approach
 from physics.core_math import check_constraints, reaches_perigee
 from physics.intercept import _refine_tof, best_lambert, intercept_scan, min_intercept, shoot_j2
@@ -256,6 +257,7 @@ class LambertPursuer(Agent):
         if time_weight_mps != 10.0:
             self.name = f"lambert_pursuer(w={time_weight_mps:g})"
 
+    @scoped_decision
     def act(self, game, side):
         assert side == "pursuer"
         R = game.rules
@@ -269,11 +271,11 @@ class LambertPursuer(Agent):
         # 已經在滑行中會進捕獲球（這個窗口內）→ 不動，省油
         if self.coast_if_captures:
             if R.capture_mode == "endpoint":
-                rp_w, _ = propagate(mu, rp, vp, game.next_window(), gd)
-                re_w, _ = propagate(mu, re, ve, game.next_window(), gd)
+                rp_w, _ = reuse_call(propagate, mu, rp, vp, game.next_window(), gd)
+                re_w, _ = reuse_call(propagate, mu, re, ve, game.next_window(), gd)
                 d_ca = float(np.linalg.norm(rp_w - re_w))
             else:
-                d_ca, _, _ = closest_approach(rp, vp, re, ve, game.next_window(), 60.0, mu, gd)
+                d_ca, _, _ = reuse_call(closest_approach, rp, vp, re, ve, game.next_window(), 60.0, mu, gd)
             # 放寬時可能正在一條撐不久的中間軌道上：要確定滑完窗口真的先抓到、不是先撞地
             if d_ca <= 0.8 * R.capture_radius_km and \
                     (not relax or orbit_survives(game, side, np.zeros(3)) or _coast_wins_window(game, side)):
@@ -296,8 +298,8 @@ class LambertPursuer(Agent):
         else:
             n_tof = int(np.clip(math.ceil(horizon / game.period("pursuer") * self.pts_per_period), 8, self.max_pts))
             tof_lo, tof_hi = 60.0, horizon
-        tofs, dvs, v1s, re_at, ve_at = intercept_scan(mu, gd, rp, vp, re, ve, tof_lo, tof_hi, n_tof,
-                                                      self.max_revs, safe_radius(game))
+        tofs, dvs, v1s, re_at, ve_at = reuse_call(intercept_scan, mu, gd, rp, vp, re, ve, tof_lo, tof_hi, n_tof,
+                                                self.max_revs, safe_radius(game))
         dvs_mps = dvs * 1000.0
         if not np.any(np.isfinite(dvs_mps)):
             return np.zeros(3)
@@ -327,7 +329,7 @@ class LambertPursuer(Agent):
             if math.isfinite(d) and d * 1000.0 <= dvs_mps[i]:
                 tof, v1 = tof_r, v1_r
         if self.j2_shoot and gd > 0:
-            r_t, _ = propagate(mu, re, ve, tof, gd)
+            r_t, _ = reuse_call(propagate, mu, re, ve, tof, gd)
             v1_s, miss = shoot_j2(mu, gd, rp, v1, r_t, tof, 6, 1e-3)
             if math.isfinite(miss) and miss < 1.0:
                 v1 = v1_s
@@ -350,14 +352,14 @@ class LambertPursuer(Agent):
                 if orbit_survives(g, s, d):
                     return True
                 if self.gap_survival >= 2 and not target:
-                    target.append((propagate(mu, re, ve, tof, gd)[0], tof))
+                    target.append((reuse_call(propagate, mu, re, ve, tof, gd)[0], tof))
                 return gap_burn_survives(g, s, d, gap, target=target[0] if target else None,
                                          max_revs=self.max_revs)
         if full and tof <= game.next_window():
             # 只有「真的會命中」才免檢查：J2 打靶沒收斂時 Lambert 二體解會偏幾公里，
             # 沒抓到就會留在一條可能撞地的轉移軌道上（copilot 演練抓到過）
-            rp_t, _ = propagate(mu, rp, vp + dv / 1000.0, tof, gd)
-            re_t, _ = propagate(mu, re, ve, tof, gd)
+            rp_t, _ = reuse_call(propagate, mu, rp, vp + dv / 1000.0, tof, gd)
+            re_t, _ = reuse_call(propagate, mu, re, ve, tof, gd)
             if np.linalg.norm(rp_t - re_t) <= 0.5 * R.capture_radius_km or survives(game, side, dv):
                 return dv
         if survives(game, side, dv):

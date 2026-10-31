@@ -11,6 +11,8 @@ import time
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass
 
+from runtime_threads import limit_blas_threads
+
 import numpy as np
 
 from game.core import Game, take_turn
@@ -91,6 +93,12 @@ def play(task: Task) -> dict:
     return s
 
 
+def _initialize_worker():
+    limit_blas_threads()
+    from agents.scan_reuse import reset_scan_reuse
+    reset_scan_reuse()
+
+
 def run_tournament(pursuers, evaders, games, workers=None, seed=0, progress=True):
     tasks = []
     for gi, (R, op, oe, fam) in enumerate(games):
@@ -106,7 +114,7 @@ def run_tournament(pursuers, evaders, games, workers=None, seed=0, progress=True
             if progress and (i + 1) % max(1, len(tasks) // 20) == 0:
                 print(f"  {i + 1}/{len(tasks)} games  {time.time() - t0:.0f}s", flush=True)
     else:
-        with ProcessPoolExecutor(max_workers=workers) as ex:
+        with ProcessPoolExecutor(max_workers=workers, initializer=_initialize_worker) as ex:
             for i, r in enumerate(ex.map(play, tasks, chunksize=1)):
                 results.append(r)
                 if progress and (i + 1) % max(1, len(tasks) // 20) == 0:
