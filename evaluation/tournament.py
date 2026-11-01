@@ -17,7 +17,7 @@ import numpy as np
 
 from game.core import Game, round_view, take_turn
 from game.rules import RuleRanges, Rules
-from game.scenarios import sample_final_rules, sample_final_scenario, sample_scenario
+from game.scenarios import sample_adversarial_scenario, sample_final_rules, sample_final_scenario, sample_scenario
 
 
 @dataclass
@@ -30,6 +30,7 @@ class Task:
     family: str
     game_id: int
     seed: int
+    meta: dict = None
 
 
 def spec_name(spec):
@@ -42,11 +43,11 @@ def spec_name(spec):
 
 
 def make_games(n_games, rules="default", scenario="mixed", seed=0):
-    """回傳 [(rules_dict, orbit_p, orbit_e, family)]。rules: "default" / "ranges" / "final_ranges" / dict / Rules。
+    """一般題回傳 4 元素；對抗題再附第 5 元素 meta。rules: "default" / "ranges" / "final_ranges" / dict / Rules。
 
-    scenario="final"（金／銅牌賽題目）時每局的安全空域由 sample_final_scenario 依題目填進 rules。"""
-    if rules == "final_ranges" and scenario != "final":
-        raise ValueError('rules="final_ranges" 只能搭配 scenario="final"')
+    金／銅牌賽題目的安全空域由情境產生器逐局填進 rules。"""
+    if rules == "final_ranges" and not scenario.startswith("final"):
+        raise ValueError('rules="final_ranges" 只能搭配 scenario="final" 或 "final_adv_<kind>"')
     out = []
     for i in range(n_games):
         rng = np.random.default_rng([seed, i])
@@ -60,9 +61,12 @@ def make_games(n_games, rules="default", scenario="mixed", seed=0):
             R = Rules.from_dict(rules)
         if scenario == "final":
             R, sc = sample_final_scenario(rng, R)
+        elif scenario.startswith("final_adv_"):
+            R, sc = sample_adversarial_scenario(rng, R, scenario.removeprefix("final_adv_"))
         else:
             sc = sample_scenario(rng, scenario)
-        out.append((R.to_dict(), sc.orbit_pursuer, sc.orbit_evader, sc.family))
+        game = (R.to_dict(), sc.orbit_pursuer, sc.orbit_evader, sc.family)
+        out.append((*game, sc.meta) if scenario.startswith("final_adv_") else game)
     return out
 
 
@@ -124,6 +128,8 @@ def play(task: Task) -> dict:
         "info_pursuer": _json_compatible(getattr(P, "history_info", None)),
         "info_evader": _json_compatible(getattr(E, "history_info", None)),
     })
+    if task.meta is not None:
+        s["scenario_meta"] = _json_compatible(task.meta)
     return s
 
 
@@ -135,10 +141,14 @@ def _initialize_worker():
 
 def run_tournament(pursuers, evaders, games, workers=None, seed=0, progress=True):
     tasks = []
-    for gi, (R, op, oe, fam) in enumerate(games):
+    for gi, game in enumerate(games):
+        if len(game) not in (4, 5):
+            raise ValueError(f"第 {gi} 局要有 4 或 5 個欄位，實際有 {len(game)} 個")
+        R, op, oe, fam = game[:4]
+        meta = game[4] if len(game) == 5 else None
         for p in pursuers:
             for e in evaders:
-                tasks.append(Task(p, e, R, op, oe, fam, gi, seed * 100003 + gi))
+                tasks.append(Task(p, e, R, op, oe, fam, gi, seed * 100003 + gi, meta))
     workers = workers or max(1, (os.cpu_count() or 2) - 2)
     results = []
     t0 = time.time()

@@ -6,6 +6,7 @@
 
 分桶以左含右不含計算，最後一桶包含上界；表內的 k/n 是躲方勝局數／局數，
 或證書成立次數／有證書紀錄的回合數。沒有資料的格子以 — 表示。
+含 scenario_meta 的逐局紀錄另列對抗題分桶；每格同時顯示躲方勝率與證書比例。
 """
 import argparse
 from collections import Counter, defaultdict
@@ -31,6 +32,21 @@ BUCKETS = (
      ("0–0.5", "0.5–2", "2 以上")),
     ("zone", "安全空域偏移：|區間中心 − 初始 a| / 一發容量",
      ("0（在區間內）", "0–2", "2–4")),
+)
+
+ADVERSARIAL_BUCKETS = (
+    ("family", "family（題目家族）", None),
+    ("sub", "sub（題目子類）", None),
+    ("zone_width_da", "zone_width_da（安全空域寬 / 一發容量）",
+     ("<0.05", "0.05–0.1", "0.1–0.3", "≥0.3")),
+    ("zone_offset_da", "|zone_offset_da|（中心相對躲方初始 a / 一發容量）",
+     ("0–1", "1–2", "2–4", "≥4")),
+    ("ap_in_zone", "ap_in_zone（追方初始 a 在安全空域內）", ("否", "是")),
+    ("cross", "cross（躲方初始 a 與區間中心位於追方兩側）", ("否", "是")),
+    ("dist0_over_DT", "dist0_over_DT（初始距離 / ΔV_lim·T_round）",
+     ("<0.2", "0.2–1", "≥1")),
+    ("epoch_gap_h", "epoch_gap_h（兩艘入軌時間差，時）",
+     ("0–6", "6–12", "12–24")),
 )
 
 
@@ -164,6 +180,109 @@ def _table_by_bucket(lines, title, key, labels, pairs, value_for_result):
     lines.append("")
 
 
+def _adversarial_buckets(result):
+    """對抗題目的分桶標籤；缺少個別欄位時保留缺資料桶。"""
+    meta = result["scenario_meta"]
+    family = result.get("family")
+    labels = {"family": str(family) if family is not None else "缺資料",
+              "sub": str(meta["sub"]) if meta.get("sub") is not None else "缺資料"}
+    labels["zone_width_da"] = _interval(
+        _number(meta.get("zone_width_da")), (0.0, 0.05, 0.1, 0.3, math.inf),
+        ADVERSARIAL_BUCKETS[2][2])
+    offset = _number(meta.get("zone_offset_da"))
+    labels["zone_offset_da"] = _interval(
+        abs(offset) if offset is not None else None,
+        (0.0, 1.0, 2.0, 4.0, math.inf), ADVERSARIAL_BUCKETS[3][2])
+    for key in ("ap_in_zone", "cross"):
+        value = meta.get(key)
+        labels[key] = "是" if value is True else "否" if value is False else "缺資料"
+    labels["dist0_over_DT"] = _interval(
+        _number(meta.get("dist0_over_DT")), (0.0, 0.2, 1.0, math.inf),
+        ADVERSARIAL_BUCKETS[6][2])
+    labels["epoch_gap_h"] = _interval(
+        _number(meta.get("epoch_gap_h")), (0.0, 6.0, 12.0, 24.0),
+        ADVERSARIAL_BUCKETS[7][2])
+    return labels
+
+
+def _certificate_counts(result):
+    """回傳成立數與有紀錄數，分母與既有證書報表相同。"""
+    history = result.get("info_evader")
+    if not isinstance(history, list):
+        return 0, 0
+    values = [bool(info["certificate"]) for info in history
+              if isinstance(info, dict) and "certificate" in info]
+    return sum(values), len(values)
+
+
+def _adversarial_table(lines, title, key, labels, pairs):
+    if labels is None:
+        labels = sorted({bucket[key] for rows in pairs.values() for _, bucket in rows})
+    extras = sorted({bucket[key] for rows in pairs.values() for _, bucket in rows
+                     if bucket[key] not in labels})
+    columns = tuple(labels) + tuple(extras)
+    lines.extend((f"### {title}", "", "| 追方 | 躲方 | " + " | ".join(columns) + " |",
+                  "|---|---|" + "---|" * len(columns)))
+    for (pursuer, evader), rows in pairs.items():
+        cells = []
+        for label in columns:
+            selected = [result for result, bucket in rows if bucket[key] == label]
+            if not selected:
+                cells.append("—")
+                continue
+            wins = sum(result["winner"] == "evader" for result in selected)
+            certificates = [_certificate_counts(result) for result in selected]
+            certified = sum(value for value, _ in certificates)
+            recorded = sum(value for _, value in certificates)
+            cells.append(f"{_ratio(wins, len(selected))} / {_ratio(certified, recorded)}")
+        lines.append(f"| {_escape(pursuer)} | {_escape(evader)} | " + " | ".join(cells) + " |")
+    lines.append("")
+
+
+def _display_number(value):
+    number = _number(value)
+    return f"{number:.6g}" if number is not None else "—"
+
+
+def _safe_evader_loss_lines(results):
+    losses = [result for result in results
+              if str(result.get("evader", "")).startswith("safe_evader")
+              and result.get("winner") != "evader"]
+    lines = ["## safe_evader 輸掉的局", "", f"共 {len(losses)} 局。", ""]
+    if not losses:
+        return lines
+    lines.extend(("| game_id | family | sub | 結局 | ΔV_lim（m/s） | R_cap（km） | "
+                  "T_round（秒） | meta 重點欄位 |",
+                  "|---:|---|---|---|---:|---:|---:|---|"))
+    meta_keys = ("a_p", "a_e", "da", "zone_width_da", "zone_offset_da",
+                 "ap_in_zone", "cross", "dist0_km", "dist0_over_DT", "epoch_gap_h")
+    for result in losses:
+        rules = result.get("rules") or {}
+        meta = result.get("scenario_meta") or {}
+        dp = _display_number(rules.get("max_dv_pursuer_mps"))
+        de = _display_number(rules.get("max_dv_evader_mps"))
+        dv = dp if dp == de else f"P {dp} / E {de}"
+        fields = []
+        for key in meta_keys:
+            if key not in meta:
+                continue
+            value = meta[key]
+            if isinstance(value, bool):
+                display = "是" if value else "否"
+            else:
+                display = _display_number(value)
+            fields.append(f"{key}={display}")
+        details = "、".join(fields) if fields else "—"
+        lines.append(f"| {_escape(result.get('game_id', '未知'))} | "
+                     f"{_escape(result.get('family', '缺資料'))} | "
+                     f"{_escape(meta.get('sub', '缺資料'))} | "
+                     f"{_escape(result.get('outcome', '缺資料'))} | {dv} | "
+                     f"{_display_number(rules.get('capture_radius_km'))} | "
+                     f"{_display_number(rules.get('window_sec'))} | {_escape(details)} |")
+    lines.append("")
+    return lines
+
+
 def _info_records(data, side, field):
     for result, bucket in data:
         history = result.get(f"info_{side}")
@@ -267,6 +386,17 @@ def breakdown_report(results, sources=None):
             lines.append(f"| {_escape(pursuer)} | {_escape(evader)} | {len(rows)} | "
                          f"{100 * mean_prob:.1f}% | {_ratio(captures, len(rows))} |")
         lines.append("")
+    adversarial = [(result, _adversarial_buckets(result)) for result in results
+                   if isinstance(result.get("scenario_meta"), dict)]
+    if adversarial:
+        adversarial_pairs = _pair_rows(adversarial)
+        lines.extend(("## 對抗題目分桶", "",
+                      f"有 {len(adversarial)} 局含 scenario_meta。每格依序顯示躲方勝率 / "
+                      "安全證書成立比例；勝率以局數、證書以有紀錄的躲方決策回合數為分母。", ""))
+        for key, title, labels in ADVERSARIAL_BUCKETS:
+            _adversarial_table(lines, title, key, labels, adversarial_pairs)
+    if any(str(result.get("evader", "")).startswith("safe_evader") for result in results):
+        lines.extend(_safe_evader_loss_lines(results))
     return "\n".join(lines).rstrip() + "\n"
 
 

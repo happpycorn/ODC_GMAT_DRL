@@ -19,7 +19,11 @@
 （mixed 只抽前三種 LEO 家族，flyby、final 家族要明指。）
 """
 import math
+import json
+from collections import Counter
 from dataclasses import dataclass
+from functools import lru_cache
+from pathlib import Path
 
 import numpy as np
 
@@ -41,6 +45,7 @@ class Scenario:
     orbit_pursuer: dict
     orbit_evader: dict
     family: str
+    meta: dict = None
 
 
 def _perigee_ok(o):
@@ -292,3 +297,186 @@ def sample_final_scenario(rng: np.random.Generator, rules):
 
 
 FAMILIES = ("default", "official_sample", "near_coplanar", "inclined", "wild", "mixed", "flyby", "flyby_pursuer")
+
+
+# ------------------------------------------------------------------ 金／銅牌賽對抗題
+ADVERSARIAL_KINDS = ("cover", "narrow", "cross", "far", "close", "taiwan")
+TAIWAN_BANK_PATH = Path(__file__).resolve().parents[1] / "configs/scenarios/taiwan_launch_bank.json"
+ADV_DIST_KM = (20.0, 1500.0)
+ADV_MAX_TRIES = 2000
+
+
+@lru_cache(maxsize=4)
+def _taiwan_pairs(path):
+    """第一次抽台灣題才讀題庫；以路徑作快取鍵，測試也能替換題庫。"""
+    with open(path, encoding="utf-8") as stream:
+        pairs = json.load(stream).get("pairs")
+    if not isinstance(pairs, list) or not pairs:
+        raise ValueError(f"台灣入軌題庫沒有 pairs：{path}")
+    return pairs
+
+
+def _adv_plane(rng, evader, pursuer, near_distance=None):
+    """各半機率同平面／小平面差；近距離題縮小傾角以保留可抽到的相位。"""
+    if rng.random() < 0.5:
+        return
+    span = 0.5 if near_distance is None else min(0.5, math.degrees(0.1 * near_distance / evader["sma"]))
+    pursuer["inc"] = float(np.clip(evader["inc"] + rng.uniform(-span, span), 0.0, 180.0))
+    pursuer["raan"] = float((evader["raan"] + rng.uniform(-span, span)) % 360.0)
+
+
+def _adv_orbit_pair(rng, rules, kind, sub):
+    """依半長軸相對位置抽雙方 LEO，接著以相位控制開局距離。"""
+    evader = _leo(rng, alt=FINAL_ALT_KM, ecc_max=FINAL_ECC_MAX, inc=rng.uniform(0.0, 100.0))
+    a_e = evader["sma"]
+    da = full_burn_dsma_km(a_e, rules.max_dv_evader_mps)
+    if kind == "cover":
+        delta = (1.0 if rng.random() < 0.5 else -1.0) * rng.uniform(1.0, 2.5) * da
+    elif kind == "cross":
+        delta = (1.0 if rng.random() < 0.5 else -1.0) * rng.uniform(0.5, 1.5) * da
+    elif kind == "far":
+        delta = (1.0 if rng.random() < 0.5 else -1.0) * rng.uniform(0.5, 2.0) * da
+    elif kind == "narrow":
+        delta = (1.0 if rng.random() < 0.5 else -1.0) * rng.uniform(0.0, 0.5) * da
+    else:
+        delta = (1.0 if rng.random() < 0.5 else -1.0) * rng.uniform(2.0, 15.0)
+    pursuer = dict(evader)
+    pursuer["sma"] = float(a_e + delta)
+    if kind == "close":
+        # 同偏心率讓徑向差以 Δa 為主，較能精確抽出 20–100 km 的開局距離。
+        min_dist = max(ADV_DIST_KM[0], 2.0 * rules.capture_radius_km) if sub == "close_frac" else ADV_DIST_KM[0]
+        max_dist = (0.2 * rules.max_dv_evader_mps / 1000.0 * rules.window_sec
+                    if sub == "close_frac" else 100.0)
+        if max_dist <= min_dist + 5.0:
+            return None, None, "close_frac 距離上限低於 20 km 或 2·R_cap"
+        target_dist = float(rng.uniform(min_dist + 2.0, max_dist - 2.0))
+        _adv_plane(rng, evader, pursuer, target_dist)
+    else:
+        pursuer["ecc"] = float(rng.uniform(0.0, FINAL_ECC_MAX))
+        _adv_plane(rng, evader, pursuer)
+        min_target = max(ADV_DIST_KM[0] + 10.0, abs(delta) + 20.0)
+        if min_target >= ADV_DIST_KM[1] - 10.0:
+            return None, None, "半長軸差已超過初始距離上限"
+        target_dist = float(rng.uniform(min_target, ADV_DIST_KM[1] - 10.0))
+    # 圓軌道的餘弦定理給相位初值；橢圓軌道與平面微擾由下方拒絕抽樣篩掉。
+    cosine = (pursuer["sma"] ** 2 + a_e ** 2 - target_dist ** 2) / (2.0 * pursuer["sma"] * a_e)
+    if not -1.0 <= cosine <= 1.0:
+        return None, None, "目標距離與兩軌道半長軸不相容"
+    phase = math.degrees(math.acos(cosine))
+    pursuer["ta"] = float((evader["ta"] + (phase if rng.random() < 0.5 else -phase)) % 360.0)
+    return pursuer, evader, None
+
+
+def _adv_zone(rng, kind, sub, a_p, a_e, da, min_lo):
+    """回傳區間；負向 far 若碰到安全高度下界，要求重抽朝正向的追方。"""
+    zone_mode = sub if kind == "taiwan" else "cover" if kind == "close" else kind
+    if zone_mode == "narrow":
+        width = (0.02 if sub == "w002" else rng.uniform(0.05, 0.1)) * da
+        offset = rng.uniform(1.0, 4.0) * da
+        center = a_e + (offset if rng.random() < 0.5 else -offset)
+    else:
+        width = rng.uniform(0.3, 1.0) * da
+        sign = 1.0 if a_p >= a_e else -1.0
+        if zone_mode == "cover":
+            center = a_p + (sign * 0.4 * width if kind == "close" else rng.uniform(-0.4, 0.4) * width)
+        elif zone_mode == "cross":
+            center = a_p + sign * rng.uniform(0.5, 2.0) * da
+        elif zone_mode == "far":
+            center = a_e + sign * rng.uniform(4.5, 5.5) * da
+            if sign < 0.0 and center - width / 2.0 < min_lo:
+                return None, "far 負向安全空域低於 300 km，須重抽正向追方"
+        else:
+            raise ValueError(f"未知的安全空域模式：{zone_mode!r}")
+    lo, hi = float(center - width / 2.0), float(center + width / 2.0)
+    if lo < min_lo:
+        return None, "安全空域下界低於 300 km"
+    return (lo, hi), None
+
+
+def sample_adversarial_scenario(rng: np.random.Generator, rules, kind: str) -> tuple[Rules, Scenario]:
+    """金／銅牌賽安全空域對抗題；最多拒絕抽樣 2000 次，逐題回報幾何中繼資料。"""
+    if kind not in ADVERSARIAL_KINDS:
+        raise ValueError(f"未知對抗題種類：{kind!r}（可用：{ADVERSARIAL_KINDS}）")
+    from game.core import sma_official
+    from physics.frames import rv2coe
+
+    rule = Rules.from_dict(rules)
+    min_lo = RE_VAL + FINAL_ZONE_MIN_ALT_KM
+    if kind == "narrow":
+        sub = "w05_10" if rng.random() < 0.5 else "w002"
+    elif kind == "close":
+        # 極短 T_round 時 close_frac 的上限會小於共同的 20 km 下限。
+        frac_limit = 0.2 * rule.max_dv_evader_mps / 1000.0 * rule.window_sec
+        frac_floor = max(ADV_DIST_KM[0], 2.0 * rule.capture_radius_km)
+        sub = "close_frac" if frac_limit > frac_floor + 5.0 and rng.random() < 0.5 else "close_km"
+    elif kind == "taiwan":
+        sub = ("cover", "narrow", "cross", "far")[int(rng.integers(4))]
+        pairs = _taiwan_pairs(str(TAIWAN_BANK_PATH))
+    else:
+        sub = None
+
+    rejected = Counter()
+    for _ in range(ADV_MAX_TRIES):
+        epoch_gap_h = None
+        if kind == "taiwan":
+            pair = pairs[int(rng.integers(len(pairs)))]
+            try:
+                pursuer, evader = (rv2coe(pair[side]["r_km"], pair[side]["v_kms"])
+                                    for side in ("pursuer", "evader"))
+                epoch_gap_h = float(pair["epoch_gap_h"])
+            except (KeyError, TypeError, ValueError) as exc:
+                rejected[f"題庫狀態欄位錯誤：{exc}"] += 1
+                continue
+        else:
+            pursuer, evader, reason = _adv_orbit_pair(rng, rule, kind, sub)
+            if reason:
+                rejected[reason] += 1
+                continue
+        if not all(FINAL_ALT_KM[0] <= o["sma"] - RE_VAL <= FINAL_ALT_KM[1]
+                   and 0.0 <= o["ecc"] <= FINAL_ECC_MAX
+                   and o["sma"] * (1.0 - o["ecc"]) - RE_VAL >= FINAL_MIN_PERIGEE_ALT_KM
+                   for o in (pursuer, evader)):
+            rejected["LEO 高度、偏心率或近地點不合法"] += 1
+            continue
+        rp, vp = get_r0_v0(**pursuer)
+        re, ve = get_r0_v0(**evader)
+        dist = float(np.linalg.norm(rp - re))
+        if kind != "taiwan" and not ADV_DIST_KM[0] <= dist <= ADV_DIST_KM[1]:
+            rejected["初始距離不在 20–1500 km"] += 1
+            continue
+        if kind == "close":
+            if sub == "close_frac" and not (2.0 * rule.capture_radius_km <= dist <
+                                              0.2 * rule.max_dv_evader_mps / 1000.0 * rule.window_sec):
+                rejected["close_frac 距離不在 2·R_cap 到 0.2·D·T 之間"] += 1
+                continue
+            if sub == "close_km" and not 20.0 <= dist <= 100.0:
+                rejected["close_km 距離不在 20–100 km"] += 1
+                continue
+        if dist <= rule.capture_radius_km:
+            rejected["開局已在捕獲半徑內"] += 1
+            continue
+        a_p, a_e = sma_official(rp, vp), sma_official(re, ve)
+        da = full_burn_dsma_km(a_e, rule.max_dv_evader_mps)
+        zone, reason = _adv_zone(rng, kind, sub, a_p, a_e, da, min_lo)
+        if reason:
+            rejected[reason] += 1
+            continue
+        center = (zone[0] + zone[1]) / 2.0
+        meta = {
+            "kind": kind,
+            "sub": sub,
+            "a_p": float(a_p),
+            "a_e": float(a_e),
+            "da": float(da),
+            "zone_width_da": float((zone[1] - zone[0]) / da),
+            "zone_offset_da": float((center - a_e) / da),
+            "ap_in_zone": bool(zone[0] <= a_p <= zone[1]),
+            "cross": bool((a_e - a_p) * (center - a_p) < 0.0),
+            "dist0_km": dist,
+            "dist0_over_DT": float(1000.0 * dist / (rule.max_dv_evader_mps * rule.window_sec)),
+        }
+        if kind == "taiwan":
+            meta["epoch_gap_h"] = epoch_gap_h
+        return rule.with_(safe_sma_km=zone), Scenario(pursuer, evader, f"final_adv_{kind}", meta)
+    details = "、".join(f"{name} {count} 次" for name, count in rejected.most_common())
+    raise RuntimeError(f"{kind} 對抗題拒絕抽樣 {ADV_MAX_TRIES} 次仍抽不到合法題目：{details}")

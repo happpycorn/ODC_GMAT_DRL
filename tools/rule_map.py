@@ -229,13 +229,17 @@ def build_tasks(base, cells, pairs, n_games, seed, scenario):
     for cid, ov, rng_name in cells:
         dist = make_ranges(rng_name) if rng_name else None
         for key, p, e in pairs:
-            for gi, (_, op, oe, fam) in enumerate(geom):
+            for gi, game in enumerate(geom):
+                sampled_rules, op, oe, fam = game[:4]
+                scenario_meta = game[4] if len(game) == 5 else None
+                sampled_base = Rules.from_dict(sampled_rules)
                 if dist is not None:
-                    R = dist.sample(np.random.default_rng([seed, gi, RANGES_STREAM]), base)
+                    R = dist.sample(np.random.default_rng([seed, gi, RANGES_STREAM]), sampled_base)
                 else:
-                    R = base.with_(**ov)
+                    R = sampled_base.with_(**ov)
                 meta = {"cell": cid, "overrides": ov, "ranges": rng_name, "pair": key}
-                out.append((meta, Task(p, e, R.to_dict(), op, oe, fam, gi, seed * 100003 + gi)))
+                out.append((meta, Task(p, e, R.to_dict(), op, oe, fam, gi, seed * 100003 + gi,
+                                       scenario_meta)))
     return out
 
 
