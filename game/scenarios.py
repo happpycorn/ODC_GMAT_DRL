@@ -23,6 +23,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from game.rules import Rules
 from physics import EARTH_MU, RE_VAL, get_r0_v0
 
 MIN_PERIGEE_ALT_KM = 250.0
@@ -192,6 +193,44 @@ def sample_scenario(rng: np.random.Generator, family: str = "mixed") -> Scenario
 
 
 # ------------------------------------------------------------------ 金／銅牌賽正式賽制
+FINAL_RULE_RANGES = {
+    "dv_lim_mps": (100.0, 500.0),
+    "capture_radius_km": (1.0, 20.0),
+    "window_sec": (600.0, 3600.0),
+}
+FINAL_RULES_BASE = Rules.from_dict({
+    "turn_mode": "simultaneous",
+    "rounds": 6,
+    "window_sec": 1200.0,
+    "burns_per_turn": 1,
+    "max_dv_pursuer_mps": 250.0,
+    "max_dv_evader_mps": 250.0,
+    "fuel_pursuer_mps": None,
+    "fuel_evader_mps": None,
+    "capture_radius_km": 5.0,
+    "capture_mode": "continuous",
+    "safe_sma_km": None,
+    "t_max_sec": 0.0,
+    "gravity_degree": 0,
+    "crash_altitude_km": 0.0,
+})
+
+
+def sample_final_rules(rng: np.random.Generator, base: Rules = FINAL_RULES_BASE) -> Rules:
+    """抽金／銅牌賽的三個待公告參數；雙方使用相同的 ΔV_lim。"""
+    def draw(name):
+        lo, hi = FINAL_RULE_RANGES[name]
+        return float(math.exp(rng.uniform(math.log(lo), math.log(hi))))
+
+    dv_lim = draw("dv_lim_mps")
+    return Rules.from_dict(base).with_(
+        max_dv_pursuer_mps=dv_lim,
+        max_dv_evader_mps=dv_lim,
+        capture_radius_km=draw("capture_radius_km"),
+        window_sec=draw("window_sec"),
+    )
+
+
 FINAL_ALT_KM = (400.0, 1500.0)       # 雙方軌道高度（sma − RE）
 FINAL_ECC_MAX = 0.01
 FINAL_MIN_PERIGEE_ALT_KM = 300.0

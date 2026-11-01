@@ -17,7 +17,7 @@ import numpy as np
 
 from game.core import Game, round_view, take_turn
 from game.rules import RuleRanges, Rules
-from game.scenarios import sample_final_scenario, sample_scenario
+from game.scenarios import sample_final_rules, sample_final_scenario, sample_scenario
 
 
 @dataclass
@@ -42,14 +42,18 @@ def spec_name(spec):
 
 
 def make_games(n_games, rules="default", scenario="mixed", seed=0):
-    """回傳 [(rules_dict, orbit_p, orbit_e, family)]。rules: "default" / "ranges" / dict / Rules。
+    """回傳 [(rules_dict, orbit_p, orbit_e, family)]。rules: "default" / "ranges" / "final_ranges" / dict / Rules。
 
     scenario="final"（金／銅牌賽題目）時每局的安全空域由 sample_final_scenario 依題目填進 rules。"""
+    if rules == "final_ranges" and scenario != "final":
+        raise ValueError('rules="final_ranges" 只能搭配 scenario="final"')
     out = []
     for i in range(n_games):
         rng = np.random.default_rng([seed, i])
         if rules == "ranges":
             R = RuleRanges().sample(rng)
+        elif rules == "final_ranges":
+            R = sample_final_rules(rng)
         elif rules == "default":
             R = Rules()
         else:
@@ -114,6 +118,7 @@ def play(task: Task) -> dict:
     s.update({
         "pursuer": spec_name(task.pursuer), "evader": spec_name(task.evader), "family": task.family,
         "game_id": task.game_id, "rules": task.rules,
+        "orbit_pursuer": dict(task.orbit_pursuer), "orbit_evader": dict(task.orbit_evader),
         "act_ms_pursuer": 1e3 * t_act["pursuer"] / max(n_act["pursuer"], 1),
         "act_ms_evader": 1e3 * t_act["evader"] / max(n_act["evader"], 1),
         "info_pursuer": _json_compatible(getattr(P, "history_info", None)),
