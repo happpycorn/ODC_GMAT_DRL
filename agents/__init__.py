@@ -39,6 +39,11 @@ REGISTRY = {
     "safe_evader_fast": lambda **kw: _safe_evader(**{"n_dirs": 60, "mags": (1.0,),
                                                   "grid_sec": 10.0, "lookahead": False, **kw}),
     "heuristic_evader": lambda **kw: _heuristic_evader(**kw),
+    "capture_pursuer": lambda **kw: _capture_pursuer(**kw),
+    "capture_pursuer_fast": lambda **kw: _capture_pursuer(**{"n_dirs": 40,
+                                                                "lambert_fracs": (0.1, 0.3, 0.6, 1.0),
+                                                                "max_model": 15, "grid_sec": 10.0,
+                                                                "lookahead": False, **kw}),
 }
 
 
@@ -50,6 +55,11 @@ def _safe_evader(**kw):
 def _heuristic_evader(**kw):
     from agents.final_evader import HeuristicEvader
     return HeuristicEvader(**kw)
+
+
+def _capture_pursuer(**kw):
+    from agents.final_pursuer import CapturePursuer
+    return CapturePursuer(**kw)
 
 
 def _lazy(**kw):

@@ -73,6 +73,19 @@ def _agent(spec):
     return _AGENT_CACHE[key]
 
 
+def _json_compatible(value):
+    """將 agent 紀錄中的 numpy 值轉成可輸出 JSON 的 Python 值。"""
+    if isinstance(value, np.ndarray):
+        return _json_compatible(value.tolist())
+    if isinstance(value, np.generic):
+        return _json_compatible(value.item())
+    if isinstance(value, dict):
+        return {k: _json_compatible(v) for k, v in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(v) for v in value]
+    return value
+
+
 def play(task: Task) -> dict:
     P = _agent(task.pursuer)
     E = _agent(task.evader)
@@ -103,6 +116,8 @@ def play(task: Task) -> dict:
         "game_id": task.game_id, "rules": task.rules,
         "act_ms_pursuer": 1e3 * t_act["pursuer"] / max(n_act["pursuer"], 1),
         "act_ms_evader": 1e3 * t_act["evader"] / max(n_act["evader"], 1),
+        "info_pursuer": _json_compatible(getattr(P, "history_info", None)),
+        "info_evader": _json_compatible(getattr(E, "history_info", None)),
     })
     return s
 
