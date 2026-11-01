@@ -8,7 +8,7 @@ import time
 import numpy as np
 
 from agents.base import Agent
-from agents.final_common import (direction_set, dsma_capacity, exact_miss, kepler, linear_margins_batch,
+from agents.final_common import (direction_set, dsma_capacity, dsma_capacity_worst, exact_miss, kepler, linear_margins_batch,
                                  make_reach, perigee_alt_km, round_context, sma_after, zone_slack)
 from game.core import sma_official
 from physics import EARTH_MU
@@ -31,8 +31,12 @@ class SafeEvader(Agent):
     simultaneous_aware = True
 
     def __init__(self, n_dirs=150, mags=(0.5, 1.0), safety_km=2.0, grid_sec=5.0,
-                 perigee_margin_km=30.0, near_opt_tol=0.05, n_verify=10, lookahead=True, seed=None):
+                 perigee_margin_km=30.0, near_opt_tol=0.05, n_verify=10, lookahead=True, seed=None,
+                 zone_dirs=60):
         self.n_dirs = int(n_dirs)
+        # 安全空域很窄時（E29：寬 0.02 發容量 ≈ 14 km），固定的 {0.5, 1}×上限推不進去；每回合另外列 zone_dirs 個方向
+        # 「推完 a 剛好在區間中心」的大小（二分），讓躲方能精準入區、也能提早入區保留閃避空間。0 = 關閉（舊行為）。
+        self.zone_dirs = int(zone_dirs)
         self.mags = tuple(float(x) for x in mags)
         self.safety_km = float(safety_km)
         self.grid_sec = float(grid_sec)
@@ -60,13 +64,17 @@ class SafeEvader(Agent):
             return np.array([0.0])
         return np.r_[0.0, np.arange(h, T, h), T].astype(np.float64)
 
-    def _candidates(self, r, v, D):
-        """零推與 Fibonacci 球面、RSW 六軸的所有指定推力大小。"""
+    def _candidates(self, r, v, D, zone=None):
+        """零推與 Fibonacci 球面、RSW 六軸的所有指定推力大小；有安全空域時再加「推完 a 剛好落在區間中心」的候選。"""
         dirs = direction_set(self.n_dirs, r, v)
         pieces = [np.zeros((1, 3), dtype=np.float64)]
         for mag in self.mags:
             if mag > 0.0:
                 pieces.append(np.asarray(dirs, dtype=np.float64) * (mag * D))
+        if zone is not None and self.zone_dirs > 0 and D > 0.0:
+            landing = _zone_landing(r, v, D, zone, direction_set(self.zone_dirs, r, v))
+            if len(landing):
+                pieces.append(landing)
         return np.concatenate(pieces, axis=0)
 
     def _lookahead_scores(self, game, rows, ctx):
@@ -102,7 +110,7 @@ class SafeEvader(Agent):
         re, ve = game.r("evader"), game.v("evader")
         rp, vp = game.r("pursuer"), game.v("pursuer")
         D = ctx["D_e"]
-        dvs = self._candidates(re, ve, D)
+        dvs = self._candidates(re, ve, D, ctx["zone"])
         zone = ctx["zone"]
         n_after = ctx["burns_left_after"]
         perigees = np.empty(len(dvs), dtype=np.float64)
@@ -116,7 +124,7 @@ class SafeEvader(Agent):
             perigees[i] = perigee_alt_km(re, vv)
             axes[i] = sma_after(re, ve, dv / 1000.0)
             if zone is not None:
-                ups[i], downs[i] = dsma_capacity(re, vv, D)
+                ups[i], downs[i] = dsma_capacity_worst(re, vv, D)   # 之後可能在遠地點出手（E29）
                 slacks[i] = zone_slack(axes[i], zone, n_after, ups[i], downs[i])
                 zone_dists[i] = _zone_distance(axes[i], zone)
 
@@ -204,6 +212,33 @@ class SafeEvader(Agent):
         self.last_info = info
         self.history_info.append(info.copy())
         return dv
+
+
+def _zone_landing(r, v, D, zone, dirs):
+    """每個方向上「推完 a 剛好是區間中心」的推力（m/s，大小 ≤ D）；到不了的方向略過。
+
+    沿固定方向 d 推 m，|v + m·d|² 在 m ≤ D（≪ 軌道速度）內單調，所以 1/a 單調、二分即可。"""
+    lo_z, hi_z = zone
+    xt = 1.0 / (0.5 * (lo_z + hi_z))
+    rn = float(np.linalg.norm(r))
+    D_kms = D / 1000.0
+    out = []
+    for d in dirs:
+        def recip(m):
+            w = v + d * m
+            return 2.0 / rn - float(w @ w) / EARTH_MU
+        x0, x1 = recip(0.0), recip(D_kms)
+        if not (min(x0, x1) <= xt <= max(x0, x1)) or x0 == xt:
+            continue
+        lo, hi = 0.0, D_kms
+        for _ in range(48):
+            mid = 0.5 * (lo + hi)
+            if (recip(mid) - xt) * (x0 - xt) > 0.0:
+                lo = mid
+            else:
+                hi = mid
+        out.append(d * (0.5 * (lo + hi) * 1000.0))
+    return np.asarray(out, dtype=np.float64).reshape(-1, 3)
 
 
 def _zone_burn(r, v, zone, D):

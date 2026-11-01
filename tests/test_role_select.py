@@ -118,3 +118,23 @@ def test_role_select_reports_missing_file(announced_task, tmp_path):
     assert process.returncode != 0
     assert "missing.json" in output and "找不到" in output
     assert "Traceback" not in output
+
+
+def test_zone_features_unreachable_overrides_recommendation():
+    """E29：6 發全推也到不了安全空域時，不看勝率表直接建議追方。"""
+    from game.scenarios import sample_adversarial_scenario, sample_final_rules
+    from physics import get_r0_v0
+    from tools.role_select import _recommend, _zone_features
+    rng = np.random.default_rng([3, 1])
+    R, sc = sample_adversarial_scenario(rng, sample_final_rules(rng), "narrow")
+    rp, vp = get_r0_v0(**sc.orbit_pursuer)
+    re, ve = get_r0_v0(**sc.orbit_evader)
+    feats = _zone_features(rp, vp, re, ve, R)
+    assert feats["reachable"] and any("很窄" in f for f in feats["flags"])
+    far = R.with_(safe_sma_km=(sc.meta["a_e"] + 30 * sc.meta["da"], sc.meta["a_e"] + 31 * sc.meta["da"]))
+    feats = _zone_features(rp, vp, re, ve, far)
+    assert not feats["reachable"] and any("到不了" in f for f in feats["flags"])
+    rows = [{"win_rate": 0.0}] * 3 + [{"win_rate": 1.0}] * 2
+    rec = _recommend(rows, {"zone_features": feats})
+    assert rec["role"] == "pursuer" and "追方" in rec["text"]
+    assert _recommend(rows, {"zone_features": {"reachable": True}})["role"] == "evader"

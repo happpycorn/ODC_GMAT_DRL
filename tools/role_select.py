@@ -172,7 +172,56 @@ def _initial_summary(game, aligned):
             "tau_star_sec": 1000.0 * rules.capture_radius_km / dv if dv > 0 else None,
             "dv_window_km": dv * rules.window_sec / 1000.0,
             "dv_lim_mps": dv, "capture_radius_km": rules.capture_radius_km,
-            "window_sec": rules.window_sec}
+            "window_sec": rules.window_sec,
+            "zone_features": _zone_features(rp, vp, re, ve, rules)}
+
+
+def _zone_features(rp, vp, re, ve, rules):
+    """安全空域對抗特徵（E29）：寬度、是否蓋住追方 a、是否要穿過追方軌道、6 發全推到不到得了。
+
+    「到得了」用同一點連續沿速度方向推滿（近圓軌道的近似），只當旗標；勝率仍以模擬為準。"""
+    zone = rules.safe_sma_km
+    if zone is None:
+        return {"flags": [], "reachable": True}
+    from agents.final_common import sma_after
+    a_p, a_e = sma_official(rp, vp), sma_official(re, ve)
+    lo, hi = zone
+    center = 0.5 * (lo + hi)
+    da = full_burn_dsma_km(a_e, rules.max_dv_evader_mps) if a_e > 0 else math.nan
+    width_da = (hi - lo) / da if da > 0 else math.nan
+    ap_in = bool(lo <= a_p <= hi)
+    cross = bool((a_e - a_p) * (center - a_p) < 0.0) and not lo <= a_e <= hi
+    v = np.asarray(ve, dtype=float).copy()
+    burns_needed = 0.0
+    if not lo <= a_e <= hi:
+        sign = 1.0 if a_e < lo else -1.0
+        a_prev = a_e
+        burns_needed = math.inf
+        for k in range(1, rules.rounds + 1):
+            v = v + sign * v / np.linalg.norm(v) * (rules.max_dv_evader_mps / 1000.0)
+            a_k = float(sma_after(np.asarray(re, dtype=float), v, np.zeros(3)))
+            near = lo if sign > 0 else hi
+            if (a_k - near) * sign >= 0.0 or not math.isfinite(a_k) or a_k < 0:
+                burns_needed = (k - 1) + (abs(near - a_prev) / abs(a_k - a_prev) if a_k != a_prev else 1.0)
+                break
+            a_prev = a_k
+    reachable = burns_needed <= rules.rounds
+    dist = float(np.linalg.norm(np.asarray(rp) - np.asarray(re)))
+    flags = []
+    if not reachable:
+        flags.append(f"6 發都沿速度方向推滿也到不了安全空域：躲方必輸（sma_out）")
+    elif burns_needed >= 4.5:
+        flags.append(f"安全空域很遠（約 {burns_needed:.1f} 發）：躲方幾乎每回合都得往同方向推，推力好猜")
+    if math.isfinite(width_da) and width_da < 0.1:
+        flags.append(f"安全空域很窄（寬 {width_da:.3f} 發容量）：躲方最後一回合要精準入區")
+    if ap_in:
+        flags.append("安全空域蓋住追方的 a：躲方入區後跟追方週期相近、相對漂移慢")
+    if cross:
+        flags.append("躲方要穿過追方的 a 才到得了安全空域")
+    if dist < 0.2 * rules.max_dv_pursuer_mps * rules.window_sec / 1000.0:
+        flags.append(f"初始距離很近（{dist:.1f} km < 0.2·ΔV_lim·T_round）")
+    return {"a_p": a_p, "a_e": a_e, "zone_width_burns": width_da, "ap_in_zone": ap_in, "cross": cross,
+            "burns_needed": burns_needed, "reachable": reachable, "flags": flags}
 
 
 def _task(pairing_index, pairing, game, seed):
@@ -347,7 +396,12 @@ def _certificates(results, pairings):
              "rate": a / n if n else None} for i, (a, n) in counts.items()]
 
 
-def _recommend(rows):
+def _recommend(rows, initial=None):
+    feats = (initial or {}).get("zone_features") or {}
+    if feats.get("reachable") is False:
+        return {"role": "pursuer", "text": "建議選：追方；躲方 6 發全推也到不了安全空域（必定 sma_out），不必看勝率表",
+                "pursuer_vs_safe_rate": rows[0]["win_rate"], "evader_vs_capture_rate": rows[3]["win_rate"],
+                "all_pursuer_avg_rate": None, "all_evader_avg_rate": None, "override": "zone_unreachable"}
     p = rows[0]["win_rate"]
     e = rows[3]["win_rate"]
     avg_p = float(np.mean([r["win_rate"] for r in rows[:3] if r["win_rate"] is not None])) \
@@ -384,6 +438,11 @@ def _print_report(report):
     a_text = f"{initial['evader_sma_km']:.1f} km" if initial["evader_sma_km"] is not None else "非有限"
     print(f"躲方初始 a {a_text}；安全空域 {zone_text}")
     print(f"τ* {initial['tau_star_sec']:.1f} 秒；ΔV_lim·T_round {initial['dv_window_km']:.1f} km")
+    feats = initial.get("zone_features") or {}
+    if feats.get("flags"):
+        print("題目特徵（安全空域對抗，E29）：")
+        for flag in feats["flags"]:
+            print(f"  - {flag}")
     print("\n| 我方 | 對手 | 我方勝率（Wilson 95%） | 局數 | 結局分布 | 平均決策 ms | 備註 |")
     print("|---|---|---:|---:|---|---:|---|")
     for row in report["pairings"]:
@@ -441,7 +500,7 @@ def main(argv=None):
                   "settings": {"budget_sec": args.budget_sec, "workers": args.workers,
                                "fast": args.fast, "seed": args.seed, "max_games": args.max_games},
                   "pairings": rows, "certificate_by_round": _certificates(results, pairings),
-                  "recommendation": _recommend(rows), "total_games": actual_games,
+                  "recommendation": _recommend(rows, initial), "total_games": actual_games,
                   "elapsed_sec": time.monotonic() - START_MONOTONIC,
                   "timed_out": timed_out, "warnings": warnings}
         _print_report(report)

@@ -568,3 +568,51 @@ Exploitability（我方勝率）：
      提交四捨五入到 0.01 m/s。最近距離常有上百 km，這些誤差（公尺級）不影響證書；但狀態抄錯單位或座標系會，F5 要把匯入防呆做好。
 - **產物**：`agents/final_{common,evader,pursuer}.py`、`tools/{role_select,final_breakdown,final_harsh_zone,cert_check}.py`、
   `tests/test_{final_evader,final_pursuer,role_select,final_rules}.py`、上列報表。程式由 Codex（codex-cli 0.160）依規格撰寫，Claude 審查、驗證與評測。
+
+## E29 安全空域對抗題、躲方兩處補強、F5 copilot 與彩排（2026-11-01 晚）
+- **問題**：E28 的安全空域只看逃方自己的 a，跟追方無關。主辦說兩場難度「經過校準」，可能故意讓閃避和安全空域衝突——
+  這種題目下選躲方的預設還站不站得住？
+- **設定**：`game.scenarios.sample_adversarial_scenario`（`--scenario final_adv_<kind>`），規則一律 `final_ranges`，Δa = 逃方一發全推的半長軸變化：
+  - `cover`：區間蓋住追方 a（寬 0.3–1 Δa），逃方初始在 1–2.5 Δa 外；`narrow`：寬 0.05–0.1 Δa 或 0.02 Δa（約 14 km）、偏 1–4 Δa；
+  - `cross`：逃方 a 與區間在追方 a 兩側；`far`：區間在追方那一側、偏 4.5–5.5 Δa；
+  - `close`：初始距離 < 0.2·ΔV_lim·T_round 或 20–100 km，疊上 cover；
+  - `taiwan`：錄影情境——兩艘都從台灣上空入軌（高度約 500 km、緯度 23.5°、經度 120°、AZI 90±3°、FPA 90±0.2°），出發時刻差 0–24 h，
+    經 GmatConsole（EarthFixed／SphericalAZFPA）轉狀態、`align_initial_states` 對齊（`configs/scenarios/taiwan_launch_bank.json`，120 對，
+    初始距離 120–13,700 km、中位數 8,700 km），安全空域照 cover／narrow／cross／far 隨機放。
+  每類 capture_pursuer／lambert_pursuer × safe_evader／heuristic_evader 各 40 局；分桶用 `tools/final_breakdown.py`（會列出 safe_evader 輸的每一局）。
+- **第一輪找到兩個弱點**（`reports/f29_adv_*.md`、`reports/f29v2_adv_*.md`）：證書比例每類都 ≥ 98.6%、證書成立的回合 0 被抓，
+  但 safe_evader 輸了 2 局，**都是 sma_out，不是被抓**：
+  1. `narrow` 寬 0.02 Δa（14 km）：候選大小只有 {0, 0.5, 1}×ΔV_lim，最後一回合落不進去 → 加「推完 a 剛好在區間中心」的候選
+     （每回合 60 個方向，二分求大小；`SafeEvader(zone_dirs=60)`，fast 版 30）。
+  2. `close`（初始就在區間內）：第 5 回合為了閃避推到 a = 8265 km（區間上界 7688），以為下回合拉得回來；但推完軌道變偏心，
+     第 6 回合在遠地點附近、逆向推滿只改 392 km → 改用「推完軌道遠地點」的保守容量（`dsma_capacity_worst`）算安全空域餘裕。
+- **補強後**（`reports/f29v3_adv_*.md`、`reports/f29v3s1_adv_*.md` 兩個種子；E28 原評測重跑 `reports/f29v3_e28_regress.md`）：
+
+| 對抗題 | safe_evader 對 capture／lambert（2 種子 × 40 局） | 證書比例 | heuristic 被 capture／lambert 打贏 |
+|---|---|---|---|
+| cover | 80/80、80/80 | 99.9% | 38%／32% |
+| narrow | 80/80、80/80 | 99.6% | 52%／32% |
+| cross | 80/80、80/80 | 99.9% | 40%／22% |
+| far | 80/80、80/80 | 100% | 55%／50% |
+| close | 80/80、80/80 | 98.6% | 62%／38% |
+| taiwan | 80/80、80/80 | 100% | 30%／35% |
+
+  safe_evader **960/960 escape**，證書成立的回合被捕獲 0 次；E28 原評測沒有退步（safe_evader 240/240，其他配對差 ≤ 2 局）。
+  safe_evader 單次決策（Corn、14 worker 同時跑）中位數 0.62 s、p99 1.45 s、最大 1.71 s。
+- **追方**：capture_pursuer 吃到同一套躲方模型（它的 F2 安全集合來自 `SafeEvader.evaluate`，自動含精準入區候選）；對 heuristic 的勝率在對抗題
+  普遍比 Lambert 高 6–24 個百分點，但對 safe_evader 仍是 0。沒有另外改追方的猜法——安全證書躲方在對抗題裡也總有「追方怎麼推都碰不到」
+  的推力，猜法再好也沒有命中的空間。
+- **角色選擇器**：題目摘要多「題目特徵（安全空域對抗）」：很窄、蓋住追方 a、要穿過追方軌道、很遠（需 ≥ 4.5 發）、初始很近、
+  6 發全推到不了。最後一項成立時**不看勝率表、直接建議追方**（躲方必定 sma_out）；用同一點連續沿速度推滿的精確迭代判斷——
+  實際一發的 Δa 隨 a 增大，線性估計 8 Δa 遠的區間 5.6 發就到得了。
+- **F5 copilot 與彩排**：`copilot.py final new|parse|manual|advise|announce|show`（`final_copilot.py`、`game/official_io.py`）讀 GMAT 報表／CSV／JSON／
+  純文字／手動輸入，印提交行並用**印出來的數字**重驗（不超過 ΔV_lim − 0.05、近地點、證書或命中率不變）。四捨五入讓大小超過上限時改在
+  8 種捨去／進位組合裡挑最近的。`tools/final_rehearsal.py`：GMAT 二體當真實世界，每回合寫官方格式檔（輪流 GMAT 報表／CSV／純文字／JSON），
+  我方走完整 CLI、只從 `提交：` 那行抄數字。Corn 跑 3 場：躲方 vs capture_pursuer（final_official）escape、躲方 vs capture_pursuer（narrow）escape、
+  追方 vs heuristic（close）對方 escape；每回合一致性檢查（官方 vs 預測）差 2–5 m、advise 0.9–2.8 s、GMAT 與引擎判定一致。
+- **結論**：**選躲方的預設站得住**。對抗題裡躲方輸過的兩局都是「沒進安全空域」而不是被抓，補強後 960/960。唯一要改選追方的是
+  「安全空域到不了」，role_select 會直接講。給主辦的新問題列在 `docs/FINAL_RULES_PLAN_20261101.md` 第四節。
+- **產物**：`game/scenarios.py`（`sample_adversarial_scenario`）、`tools/make_taiwan_bank.py`、`configs/scenarios/taiwan_launch_bank.json`、
+  `agents/final_evader.py`（`zone_dirs`、遠地點容量）、`agents/final_common.py`（`dsma_capacity_worst`）、`tools/role_select.py`（`_zone_features`）、
+  `final_copilot.py`、`game/official_io.py`、`tools/final_rehearsal.py`、`tests/test_{adversarial_scenarios,official_io,final_copilot,final_rehearsal}.py`。
+  題目產生器與 copilot 主體由 Codex 依規格撰寫（兩個任務都在中途額度用完），Claude 補完測試、修正與兩處躲方補強、彩排工具、評測。

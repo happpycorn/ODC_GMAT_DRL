@@ -466,6 +466,29 @@ def dsma_capacity(r, v, D):
     return up, down
 
 
+def dsma_capacity_worst(r, v, D):
+    """之後各回合起點可能在軌道上任何位置：取遠地點（速度最小、沿速度推改 a 最少）的容量，跟此刻的取小。
+
+    E29 教訓：推出偏心軌道後，下一回合剛好在遠地點附近，逆向推滿拉不回安全空域。雙曲線沒有遠地點，退回此刻的容量。"""
+    up, down = dsma_capacity(r, v, D)
+    r = np.asarray(r, dtype=np.float64)
+    v = np.asarray(v, dtype=np.float64)
+    rn = float(np.linalg.norm(r))
+    a = float(sma_after(r, v, np.zeros(3)))
+    if not (math.isfinite(a) and a > 0.0):
+        return up, down
+    h = np.cross(r, v)
+    ecc = math.sqrt(max(0.0, 1.0 - float(h @ h) / (EARTH_MU * a)))
+    ra = a * (1.0 + ecc)
+    va = math.sqrt(max(0.0, EARTH_MU * (2.0 / ra - 1.0 / a)))
+    if va <= 0.0 or ra <= rn * 0.999999 and ecc < 1e-12:
+        return up, down
+    r_apo = np.array([ra, 0.0, 0.0])
+    v_apo = np.array([0.0, va, 0.0])
+    up_a, down_a = dsma_capacity(r_apo, v_apo, D)
+    return min(up, up_a), min(down, down_a)
+
+
 def zone_slack(a, zone, n_burns, up, down):
     """剩餘發數的保守半長軸可達餘裕，負值表示到不了安全區間。"""
     if zone is None:
