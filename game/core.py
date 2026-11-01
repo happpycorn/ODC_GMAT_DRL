@@ -227,6 +227,14 @@ class Game:
             g._pending = {**self._pending, "burns": list(self._pending["burns"])}
         return g
 
+    def alternating_view(self, side) -> "Game":
+        """simultaneous 局給舊 agent 用的副本：同一個狀態、同一個 T_max，但規則換成回合交替、輪到 side，
+        讓為交替賽制寫的 agent（內部用 play_turn 模擬）照常運作。只是決策用的模型，真的局不受影響。"""
+        g = self.clone()
+        g.rules = self.rules.with_(turn_mode="alternating", t_max_sec=self.t_max, first_mover=side)
+        g.mover = side
+        return g
+
     # ------------------------------------------------------------------ 查詢
     def r(self, side):
         return self._r[side]
@@ -526,9 +534,15 @@ def take_turn(game, agent, first_dv=None) -> dict:
     return game.play_plan(plan_turn(game, agent, first_dv))
 
 
+def round_view(game, agent, side) -> "Game":
+    """simultaneous 回合起點給 agent 的副本。agent 有 `simultaneous_aware = True` 時拿同賽制的副本
+    （可以自己用 play_round 模擬）；舊 agent 拿 Game.alternating_view。"""
+    return game.clone() if getattr(agent, "simultaneous_aware", False) else game.alternating_view(side)
+
+
 def take_round(game, agent_pursuer, agent_evader) -> dict:
     """simultaneous 賽制：兩邊的 agent 各自拿回合起點的副本決定這一發（互相看不到、也改不到真的
     game），再同時執行。"""
-    dv_p = agent_pursuer.act(game.clone(), "pursuer")
-    dv_e = agent_evader.act(game.clone(), "evader")
+    dv_p = agent_pursuer.act(round_view(game, agent_pursuer, "pursuer"), "pursuer")
+    dv_e = agent_evader.act(round_view(game, agent_evader, "evader"), "evader")
     return game.play_round(dv_p, dv_e)

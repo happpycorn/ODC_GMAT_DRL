@@ -15,9 +15,9 @@ from runtime_threads import limit_blas_threads
 
 import numpy as np
 
-from game.core import Game, take_turn
+from game.core import Game, round_view, take_turn
 from game.rules import RuleRanges, Rules
-from game.scenarios import sample_scenario
+from game.scenarios import sample_final_scenario, sample_scenario
 
 
 @dataclass
@@ -42,7 +42,9 @@ def spec_name(spec):
 
 
 def make_games(n_games, rules="default", scenario="mixed", seed=0):
-    """回傳 [(rules_dict, orbit_p, orbit_e, family)]。rules: "default" / "ranges" / dict / Rules。"""
+    """回傳 [(rules_dict, orbit_p, orbit_e, family)]。rules: "default" / "ranges" / dict / Rules。
+
+    scenario="final"（金／銅牌賽題目）時每局的安全空域由 sample_final_scenario 依題目填進 rules。"""
     out = []
     for i in range(n_games):
         rng = np.random.default_rng([seed, i])
@@ -52,7 +54,10 @@ def make_games(n_games, rules="default", scenario="mixed", seed=0):
             R = Rules()
         else:
             R = Rules.from_dict(rules)
-        sc = sample_scenario(rng, scenario)
+        if scenario == "final":
+            R, sc = sample_final_scenario(rng, R)
+        else:
+            sc = sample_scenario(rng, scenario)
         out.append((R.to_dict(), sc.orbit_pursuer, sc.orbit_evader, sc.family))
     return out
 
@@ -77,6 +82,15 @@ def play(task: Task) -> dict:
     t_act = {"pursuer": 0.0, "evader": 0.0}
     n_act = {"pursuer": 0, "evader": 0}
     while not g.done:
+        if g.rules.simultaneous:             # 同時出手：每回合雙方各在副本上決定一次（同 game.core.take_round）
+            dv = {}
+            for side, agent in (("pursuer", P), ("evader", E)):
+                t0 = time.perf_counter()
+                dv[side] = agent.act(round_view(g, agent, side), side)
+                t_act[side] += time.perf_counter() - t0
+                n_act[side] += 1
+            g.play_round(dv["pursuer"], dv["evader"])
+            continue
         side = g.mover
         agent = P if side == "pursuer" else E
         t0 = time.perf_counter()
@@ -163,7 +177,7 @@ def markdown_report(results, title="Tournament", meta=None):
         for k, v in meta.items():
             lines.append(f"- **{k}**: {v}")
         lines.append("")
-    lines += ["## 追者勝率（捕獲 + 躲者撞地），列 = 追者、欄 = 躲者", ""]
+    lines += ["## 追者勝率（捕獲 + 躲者撞地；同時出手賽制另含 sma_out），列 = 追者、欄 = 躲者", ""]
     lines.append("| 追者 \\ 躲者 | " + " | ".join(es) + " | 平均 |")
     lines.append("|---|" + "---|" * (len(es) + 1))
     for p in ps:

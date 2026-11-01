@@ -21,6 +21,11 @@ GMAT 端設定刻意跟 Planner 已驗證過的 script_generator 一致：
 用法：
     uv run python tools/gmat_verify.py --pursuer lambert_pursuer --evader dv_evader --seed 0
     uv run python tools/gmat_verify.py --rules configs/rulesets/ranking_like.json --force-model ranking_full
+    uv run python tools/gmat_verify.py --rules configs/rulesets/final_official.json --scenario final --evader random
+
+金／銅牌賽（simultaneous）的回合紀錄 side == "both"：回合起點兩艘各自 Maneuver（零向量略過），
+再一起 Propagate Synchronized 滑行 coast_sec；每回合結束仍 Report 一列（回合數 + 1 列）。
+力學用 force_model="zonal" + gravity_degree=0 就是點質量（純二體）。
 """
 import argparse
 import os
@@ -102,6 +107,9 @@ def _sc_block(name, r, v, force_model="zonal", epoch_offset_sec=0.0, *, spacecra
     else:
         lines.append(f"{name}.DryMass = {spacecraft_parameters(spacecraft)['DryMass']};")
     return "\n".join(lines)
+
+
+_SHIP = {"pursuer": "ShipP", "evader": "ShipE"}
 
 
 def _burns(rec):
@@ -189,12 +197,12 @@ RF.Add = {{{rep_cols.replace(" ", ", ")}}};
 BeginMissionSequence;
 Report Rep {rep_cols};""")
     for k, rec in enumerate(game.history):
-        ship = "ShipP" if rec["side"] == "pursuer" else "ShipE"
         seq = []
         bs = _burns(rec)
         for j, b in enumerate(bs):
             if b["dv_mps"] > 0.0:
-                seq.append(f"Maneuver {_burn_name(k, j)}({ship});")
+                # simultaneous 紀錄（side == "both"）每發帶自己的 side，同一時刻依序施加、滑行段長 0
+                seq.append(f"Maneuver {_burn_name(k, j)}({_SHIP[b.get('side', rec['side'])]});")
             # 這一發到下一發（或窗口結束）的滑行；單發時就是整個窗口
             end = (bs[j + 1]["t"] - rec["t"]) if j + 1 < len(bs) else rec["coast_sec"]
             seg = end - (b["t"] - rec["t"])
@@ -533,9 +541,9 @@ def verify_game(game, console=GMAT_CONSOLE, force_model="zonal", *,
 
 def main():
     from agents import make_agent
-    from game.core import Game, take_turn
+    from game.core import Game, take_round, take_turn
     from game.rules import RuleRanges, Rules
-    from game.scenarios import sample_scenario
+    from game.scenarios import sample_final_scenario, sample_scenario
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--pursuer", default="lambert_pursuer")
@@ -560,11 +568,17 @@ def main():
         R = Rules.from_dict(json.load(open(args.rules)))
     if args.gravity_degree is not None:
         R = R.with_(gravity_degree=args.gravity_degree)
-    sc = sample_scenario(rng, args.scenario)
+    if args.scenario == "final":
+        R, sc = sample_final_scenario(rng, R)
+    else:
+        sc = sample_scenario(rng, args.scenario)
     g = Game.from_elements(R, sc.orbit_pursuer, sc.orbit_evader)
     P, E = make_agent(args.pursuer), make_agent(args.evader)
     while not g.done:
-        take_turn(g, P if g.mover == "pursuer" else E)
+        if R.simultaneous:
+            take_round(g, P, E)
+        else:
+            take_turn(g, P if g.mover == "pursuer" else E)
     print("game:", g.summary())
     import json
     params = json.load(open(args.spacecraft_json)) if args.spacecraft_json else None

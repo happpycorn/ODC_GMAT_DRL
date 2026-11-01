@@ -4,6 +4,8 @@
     uv run python evaluate.py --pursuers lambert_pursuer,minimax_pursuer \
         --evaders coast,random,dv_evader,minimax_evader --games 40 --rules ranges --scenario mixed
     # 規則已知時（例如公告後）：--rules configs/rules_final.json
+    # 金／銅牌賽正式賽制（同時出手、安全空域由題目產生器填）：
+    #   --rules configs/rulesets/final_official.json --scenario final
     # RL 策略：--pursuers sb3:runs/xxx/pursuer.zip
 
 輸出 reports/<name>.md（報表）與 reports/<name>.jsonl（逐局原始紀錄）。
@@ -35,7 +37,7 @@ def main():
     ap.add_argument("--evaders", default="coast,random,dv_evader")
     ap.add_argument("--games", type=int, default=20)
     ap.add_argument("--rules", default="default", help="default / ranges / 規則 JSON 檔路徑")
-    ap.add_argument("--scenario", default="mixed")
+    ap.add_argument("--scenario", default="mixed", help="幾何家族（見 game/scenarios.py）；final = 金／銅牌賽題目")
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--workers", type=int, default=None)
     ap.add_argument("--name", default=None)

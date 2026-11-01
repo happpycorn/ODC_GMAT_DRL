@@ -13,14 +13,17 @@
                         兩百 m/s 就攔得到不動的躲者（有得打）。躲者開賽時在 FLYBY_BOUNDARY_KM 的 95% 以內，
                         配 `Rules(t_max_boundary_km=FLYBY_BOUNDARY_KM)` 時 T_max 約 2–3.5 小時。
   * flyby_pursuer    —— 同 flyby、角色對調（追者雙曲線、躲者 LEO）。
-（mixed 只抽前三種 LEO 家族，flyby 家族要明指。）
+  * final            —— 金／銅牌賽正式賽制（2026/10/29 規則）：雙方 LEO、初始距離 20–1000 km，另外要出安全空域
+                        （逃方半長軸區間），所以不走 sample_scenario，用 sample_final_scenario(rng, rules) 同時回傳
+                        填好 safe_sma_km 的 Rules。
+（mixed 只抽前三種 LEO 家族，flyby、final 家族要明指。）
 """
 import math
 from dataclasses import dataclass
 
 import numpy as np
 
-from physics import EARTH_MU, RE_VAL
+from physics import EARTH_MU, RE_VAL, get_r0_v0
 
 MIN_PERIGEE_ALT_KM = 250.0
 
@@ -186,6 +189,67 @@ def sample_scenario(rng: np.random.Generator, family: str = "mixed") -> Scenario
         if _perigee_ok(p) and _perigee_ok(e):
             return Scenario(p, e, family)
     raise RuntimeError("場景抽樣 100 次都不合法，檢查家族參數")
+
+
+# ------------------------------------------------------------------ 金／銅牌賽正式賽制
+FINAL_ALT_KM = (400.0, 1500.0)       # 雙方軌道高度（sma − RE）
+FINAL_ECC_MAX = 0.01
+FINAL_MIN_PERIGEE_ALT_KM = 300.0
+FINAL_DIST_KM = (20.0, 1000.0)       # 初始距離
+FINAL_P_IN_ZONE = 0.2                # 初始 a 就在安全空域內的題目比例
+FINAL_ZONE_ROUNDS = (1.0, 4.0)       # 其餘題目：區間中心距初始 a 要幾回合「順／逆向全推 ΔV_lim」
+FINAL_ZONE_WIDTH_ROUNDS = (0.3, 1.0)  # 區間寬度（回合的 Δa）
+FINAL_ZONE_MIN_ALT_KM = 300.0        # 區間下界至少 RE + 這個值（逆向推太多會撞地，改出順向的題）
+
+
+def full_burn_dsma_km(sma_km, dv_mps, mu=EARTH_MU):
+    """近圓軌道順向（或逆向）推 dv 一發的半長軸變化 Δa ≈ 2·a^{3/2}·Δv/√μ（km）。"""
+    return 2.0 * sma_km ** 1.5 * (dv_mps / 1000.0) / math.sqrt(mu)
+
+
+def _final_pair(rng):
+    """(追方, 逃方) 六根數：同軌道面相位差，或小平面差（≤ 1°）加相位差；初始距離在 FINAL_DIST_KM。"""
+    for _ in range(1000):
+        e = _leo(rng, alt=FINAL_ALT_KM, ecc_max=FINAL_ECC_MAX, inc=rng.uniform(0.0, 100.0))
+        p = dict(e)
+        p["sma"] = float(e["sma"] + rng.uniform(-50.0, 50.0))
+        p["ecc"] = float(rng.uniform(0.0, FINAL_ECC_MAX))
+        if rng.random() < 0.5:                                   # 小平面差
+            p["inc"] = float(np.clip(e["inc"] + rng.uniform(-1.0, 1.0), 0.0, 180.0))
+            p["raan"] = float((e["raan"] + rng.uniform(-1.0, 1.0)) % 360.0)
+        sign = 1.0 if rng.random() < 0.5 else -1.0
+        p["ta"] = float((e["ta"] + sign * rng.uniform(0.1, 8.0)) % 360.0)
+        ok = all(FINAL_ALT_KM[0] <= o["sma"] - RE_VAL <= FINAL_ALT_KM[1]
+                 and o["sma"] * (1.0 - o["ecc"]) - RE_VAL >= FINAL_MIN_PERIGEE_ALT_KM for o in (p, e))
+        if not ok:
+            continue
+        d = float(np.linalg.norm(get_r0_v0(**p)[0] - get_r0_v0(**e)[0]))
+        if FINAL_DIST_KM[0] <= d <= FINAL_DIST_KM[1]:
+            return p, e
+    raise RuntimeError("final 場景抽樣 1000 次都不合法，檢查參數")
+
+
+def sample_final_scenario(rng: np.random.Generator, rules):
+    """金／銅牌賽題目：回傳 (填好 safe_sma_km 的 Rules, Scenario(family="final"))。
+
+    安全空域以逃方初始 a（sma_official）為基準、用逃方的 ΔV_lim 估一回合全推的 Δa：FINAL_P_IN_ZONE 的題目
+    初始 a 就在區間內；其餘題目區間中心偏 1–4 回合、寬 0.3–1 回合的 Δa（下界太低會撞地時改成順向）。"""
+    from game.core import sma_official
+    from game.rules import Rules
+    R = Rules.from_dict(rules)
+    op, oe = _final_pair(rng)
+    a0 = sma_official(*get_r0_v0(**oe))
+    da = full_burn_dsma_km(a0, R.max_dv_evader_mps)
+    width = float(rng.uniform(*FINAL_ZONE_WIDTH_ROUNDS)) * da
+    if rng.random() < FINAL_P_IN_ZONE:
+        center = a0 + float(rng.uniform(-0.4, 0.4)) * width
+    else:
+        offset = float(rng.uniform(*FINAL_ZONE_ROUNDS)) * da
+        center = a0 + offset if rng.random() < 0.5 else a0 - offset
+        if center - width / 2.0 < RE_VAL + FINAL_ZONE_MIN_ALT_KM:
+            center = a0 + offset
+    zone = (center - width / 2.0, center + width / 2.0)
+    return R.with_(safe_sma_km=zone), Scenario(op, oe, "final")
 
 
 FAMILIES = ("default", "official_sample", "near_coplanar", "inclined", "wild", "mixed", "flyby", "flyby_pursuer")
