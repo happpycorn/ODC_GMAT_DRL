@@ -35,7 +35,21 @@ REGISTRY = {
     "adaptive_evader": lambda **kw: _adaptive(**kw),
     # 受威脅才閃（E22）：平常不推，追者下一回合窗口內攔得到才用 DvEvader 的閃法；排位版規則下對我們所有追者都存活
     "lazy_evader": lambda **kw: _lazy(**kw),
+    "safe_evader": lambda **kw: _safe_evader(**kw),
+    "safe_evader_fast": lambda **kw: _safe_evader(**{"n_dirs": 60, "mags": (1.0,),
+                                                  "grid_sec": 10.0, "lookahead": False, **kw}),
+    "heuristic_evader": lambda **kw: _heuristic_evader(**kw),
 }
+
+
+def _safe_evader(**kw):
+    from agents.final_evader import SafeEvader
+    return SafeEvader(**kw)
+
+
+def _heuristic_evader(**kw):
+    from agents.final_evader import HeuristicEvader
+    return HeuristicEvader(**kw)
 
 
 def _lazy(**kw):
