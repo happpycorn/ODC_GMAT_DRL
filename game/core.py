@@ -16,6 +16,11 @@ T_max（開賽時定死，之後不變）：`Rules.t_max_sec` > 0 直接用；�
 （飛掠方過近地點後地心距離第一次增加到任務邊界的時刻，見 boundary_exit_time）；否則 t_max_periods × 追者
 初始週期（追者是雙曲線、沒有週期時改用躲者的週期）。
 
+同時出手（金／銅牌賽正式賽制，`Rules.turn_mode = "simultaneous"`）：`play_round(dv_p, dv_e)` 在回合起點
+同時施加雙方的一發，一起滑行 window_sec（= T_round），共 rounds 回合；`take_round` 讓兩邊的 agent 各自在
+副本上決定，互相看不到。最後一回合結束時逃方半長軸（sma_official）落在 `safe_sma_km` → escape（躲者勝），
+否則 sma_out（追者勝）；沒有 safe_sma_km 時就是 timeout。
+
 Agent 直接吃 Game（完整狀態：雙方 r/v、燃料、時間、規則），不必經過 RL 觀測；RL 的
 觀測由 game/obs.py 從 Game 組出來。
 """
@@ -34,12 +39,20 @@ OUTCOME_WINNER = {
     "crash_evader": "pursuer",
     "timeout": "evader",
     "crash_pursuer": "evader",
+    "escape": "evader",
+    "sma_out": "pursuer",
 }
 
 
 def sma_from_rv(r, v, mu=EARTH_MU):
     energy = float(v @ v) / 2.0 - mu / float(np.linalg.norm(r))
     return -mu / (2.0 * energy) if energy < 0 else math.inf
+
+
+def sma_official(r, v, mu=EARTH_MU):
+    """金／銅牌賽規則的半長軸 a = (2/|r| − |v|²/μ)^-1（km）：雙曲線為負，拋物線為 inf。"""
+    x = 2.0 / float(np.linalg.norm(r)) - float(np.dot(v, v)) / mu
+    return 1.0 / x if x != 0.0 else math.inf
 
 
 def specific_energy(r, v, mu=EARTH_MU):
@@ -142,7 +155,10 @@ class Game:
                    "evader": np.asarray(ve, dtype=np.float64).copy()}
         self.used = {"pursuer": 0.0, "evader": 0.0}
         self.t = 0.0
-        if rules.t_max_sec > 0:
+        if rules.t_max_sec <= 0 and rules.simultaneous:
+            self.t_max = rules.rounds * float(rules.window_sec)
+            self.t_max_basis = "rounds"
+        elif rules.t_max_sec > 0:
             self.t_max = float(rules.t_max_sec)
             self.t_max_basis = "t_max_sec"
         elif rules.t_max_boundary_km > 0:
@@ -183,7 +199,7 @@ class Game:
 
     @classmethod
     def from_snapshot(cls, rules: Rules, rp, vp, re, ve, *, t=0.0, t_max=None, used=None, mover=None,
-                      mu: float = EARTH_MU):
+                      mu: float = EARTH_MU, round_index=None):
         """從比賽進行中的某個狀態建 Game（copilot 用：當天看到的是中途狀態）。
 
         t_max 給絕對秒數（從比賽開始算）；未給時沿用 rules 的定義（以「此刻」的狀態算週期或飛出
@@ -194,8 +210,11 @@ class Game:
         g.t = float(t)
         g.used = {"pursuer": 0.0, "evader": 0.0, **(used or {})}
         g.mover = mover or R.first_mover
+        if R.simultaneous:
+            # round_index = 已完成的回合數；沒給時用 t 推（每回合都滑滿 window_sec）
+            g.turn = int(round_index) if round_index is not None else int(round(g.t / R.window_sec))
         if g.t >= g.t_max - 1e-6 and g.outcome is None:
-            g.outcome = "timeout"
+            g.outcome = g._terminal_outcome() if R.simultaneous else "timeout"
         return g
 
     def clone(self) -> "Game":
@@ -276,6 +295,8 @@ class Game:
     def sub_burn(self, dv_eci_mps, coast_sec):
         """輪到的一方推一發，雙方滑行 min(coast_sec, 窗口剩餘)。窗口滑完（或比賽結束）時結束
         回合、換手並回傳回合紀錄；否則回傳 None（仍在同一窗口，可再推下一發）。"""
+        if self.rules.simultaneous:
+            raise RuntimeError("simultaneous 賽制請用 play_round（雙方同時出手）")
         if self.done:
             raise RuntimeError("比賽已結束")
         side = self.mover
@@ -353,6 +374,8 @@ class Game:
 
         不合法的發會被丟掉：偏移不在「現在～窗口結束」之間、跟前一發間隔 < min_burn_gap_sec、
         超過 burns_per_turn 發（含這個窗口已經下的）。零向量不算一發。回傳回合紀錄。"""
+        if self.rules.simultaneous:
+            raise RuntimeError("simultaneous 賽制請用 play_round（雙方同時出手）")
         if self.done:
             raise RuntimeError("比賽已結束")
         R = self.rules
@@ -380,6 +403,70 @@ class Game:
                 break
         return rec
 
+    def play_round(self, dv_pursuer_eci_mps, dv_evader_eci_mps) -> dict:
+        """simultaneous 賽制的一回合：雙方的一發（自動等比例縮到上限）在回合起點同時施加，一起滑行
+        window_sec（最後截到 T_max），連續偵測捕獲／撞地，事件發生就停在那個時刻結束比賽。
+        最後一回合滑完沒有事件時判終局（見 _terminal_outcome）。回傳的回合紀錄就是主辦單位每回合
+        公告的內容：雙方實際 Δv、最近距離與時刻、是否攔截、逃方半長軸、回合結束時的狀態。"""
+        R = self.rules
+        if not R.simultaneous:
+            raise RuntimeError("play_round 只用在 simultaneous 賽制；回合交替請用 play_turn")
+        if self.done:
+            raise RuntimeError("比賽已結束")
+        t0 = self.t
+        burns = []
+        for side, dv_in in (("pursuer", dv_pursuer_eci_mps), ("evader", dv_evader_eci_mps)):
+            sub = np.asarray(dv_in, dtype=np.float64).reshape(3).copy()
+            dv = self.clip_dv(side, sub)
+            mag = float(np.linalg.norm(dv))
+            r_b, v_b = self._r[side].copy(), self._v[side].copy()
+            burns.append({"side": side, "t": t0, "dv_eci_mps": dv, "dv_rsw_mps": rsw_basis(r_b, v_b) @ dv,
+                          "dv_mps": mag, "r_before": r_b, "v_before": v_b, "dv_submitted_mps": sub,
+                          "scaled": bool(not np.array_equal(dv, sub))})
+        for b in burns:                       # 兩發都用回合起點的狀態算完才一起施加
+            self._v[b["side"]] = self._v[b["side"]] + b["dv_eci_mps"] / 1000.0
+            self.used[b["side"]] += b["dv_mps"]
+
+        dt = min(float(R.window_sec), self.time_left)
+        continuous = R.capture_mode == "continuous"
+        rp, vp, re, ve, t_el, ev, dmin, t_dmin = coast_pair(
+            self._r["pursuer"], self._v["pursuer"], self._r["evader"], self._v["evader"],
+            dt, R.substep_sec, self.mu, R.gravity_degree, R.capture_radius_km if continuous else -1.0,
+            self.crash_radius)
+        if not continuous and ev == EV_NONE and float(np.linalg.norm(rp - re)) <= R.capture_radius_km:
+            ev = EV_CAPTURE                      # endpoint 模式：只看回合結束瞬間
+        self._r["pursuer"], self._v["pursuer"] = rp, vp
+        self._r["evader"], self._v["evader"] = re, ve
+        self.t += float(t_el)
+        self.min_dist = min(self.min_dist, float(dmin))
+        if ev == EV_CAPTURE:
+            self.outcome = "capture"
+        elif ev == EV_CRASH_P:
+            self.outcome = "crash_pursuer"
+        elif ev == EV_CRASH_E:
+            self.outcome = "crash_evader"
+        elif self.t >= self.t_max - 1e-6:
+            self.outcome = self._terminal_outcome()
+
+        rec = {
+            "round": self.turn + 1, "turn": self.turn, "side": "both", "t": t0, "burns": burns,
+            "coast_sec": float(t_el), "window_min_dist_km": float(dmin), "t_window_min": t0 + float(t_dmin),
+            "distance_after_km": self.distance(), "outcome": self.outcome,
+            "rp_after": rp.copy(), "vp_after": vp.copy(), "re_after": re.copy(), "ve_after": ve.copy(),
+            "sma_evader_km": sma_official(re, ve, self.mu),
+        }
+        self.history.append(rec)
+        self.turn += 1
+        return rec
+
+    def _terminal_outcome(self) -> str:
+        """simultaneous 撐完所有回合時的結局：沒有安全空域 → timeout；逃方 a 在 [lo, hi] → escape，否則 sma_out。"""
+        if self.rules.safe_sma_km is None:
+            return "timeout"
+        lo, hi = self.rules.safe_sma_km
+        a = sma_official(self._r["evader"], self._v["evader"], self.mu)
+        return "escape" if lo <= a <= hi else "sma_out"
+
     def set_state(self, side, r, v):
         """把某方的位置速度換成外部給的值（彩排時讓帳本跟 GMAT 的「真實世界」同步）。"""
         if self.mid_window:
@@ -388,11 +475,15 @@ class Game:
         self._v[side] = np.asarray(v, dtype=np.float64).reshape(3).copy()
 
     def summary(self) -> dict:
-        return {
+        out = {
             "outcome": self.outcome, "winner": self.winner, "t_end": self.t, "t_max": self.t_max,
             "turns": self.turn, "min_dist_km": self.min_dist, "final_dist_km": self.distance(),
             "used_pursuer_mps": self.used["pursuer"], "used_evader_mps": self.used["evader"],
         }
+        if self.rules.simultaneous:
+            out["rounds_played"] = self.turn
+            out["final_sma_evader_km"] = sma_official(self._r["evader"], self._v["evader"], self.mu)
+        return out
 
 
 def plan_turn(game, agent, first_dv=None):
@@ -433,3 +524,11 @@ def take_turn(game, agent, first_dv=None) -> dict:
     if game.rules.burns_per_turn <= 1:
         return game.play_turn(agent.act(game, game.mover) if first_dv is None else first_dv)
     return game.play_plan(plan_turn(game, agent, first_dv))
+
+
+def take_round(game, agent_pursuer, agent_evader) -> dict:
+    """simultaneous 賽制：兩邊的 agent 各自拿回合起點的副本決定這一發（互相看不到、也改不到真的
+    game），再同時執行。"""
+    dv_p = agent_pursuer.act(game.clone(), "pursuer")
+    dv_e = agent_evader.act(game.clone(), "evader")
+    return game.play_round(dv_p, dv_e)

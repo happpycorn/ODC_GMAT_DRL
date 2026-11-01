@@ -11,6 +11,7 @@ import math
 import numpy as np
 
 SIDES = ("pursuer", "evader")
+TURN_MODES = ("alternating", "simultaneous")
 
 
 def other(side: str) -> str:
@@ -37,6 +38,12 @@ class Rules:
     capture_mode: str = "continuous"     # "continuous"：任何時刻進捕獲球就算；"endpoint"：只看每回合結束瞬間
     burns_per_turn: int = 1              # 一個回合（窗口）內輪到的一方最多下幾發（HAP-107）
     min_burn_gap_sec: float = 100.0      # 同一窗口內兩發的最小間隔（照排位賽規則；只在 burns_per_turn > 1 時有作用）
+    # 金／銅牌賽正式賽制（2026/10/29 規則）："simultaneous" = 雙方在回合起點同時各推一發、互相看不到，
+    # 每回合滑行 window_sec（= T_round），共 rounds 回合。"alternating" = 舊的回合交替。
+    turn_mode: str = "alternating"
+    rounds: int = 6                      # simultaneous 的回合數；T_max = rounds × window_sec（t_max_sec 沒給時）
+    # simultaneous 終局：最後一回合結束時逃方半長軸（km，雙曲線為負）落在 [lo, hi] 才算逃方贏；None = 撐完就贏
+    safe_sma_km: tuple = None
 
     def __post_init__(self):
         if self.first_mover not in SIDES:
@@ -49,6 +56,16 @@ class Rules:
             raise ValueError("window_sec 必須 > 0")
         if not self.t_max_boundary_km >= 0:
             raise ValueError(f"t_max_boundary_km 必須 >= 0（0 = 不用邊界定義），收到 {self.t_max_boundary_km!r}")
+        if self.turn_mode not in TURN_MODES:
+            raise ValueError(f"turn_mode 必須是 {TURN_MODES}，收到 {self.turn_mode!r}")
+        if self.rounds < 1:
+            raise ValueError("rounds 至少 1")
+        if self.turn_mode == "simultaneous" and self.burns_per_turn != 1:
+            raise ValueError("simultaneous 賽制每回合只能一發（burns_per_turn 必須是 1）")
+        if self.safe_sma_km is not None:
+            lo, hi = self.safe_sma_km
+            if not (math.isfinite(lo) and math.isfinite(hi) and lo < hi):
+                raise ValueError(f"safe_sma_km 必須是 (lo, hi) 且 lo < hi，收到 {self.safe_sma_km!r}")
 
     def max_dv(self, side: str) -> float:
         return self.max_dv_pursuer_mps if side == "pursuer" else self.max_dv_evader_mps
@@ -68,10 +85,21 @@ class Rules:
         unknown = set(d) - names
         if unknown:
             raise KeyError(f"未知的規則欄位：{sorted(unknown)}（可用：{sorted(names)}）")
+        for k in ("fuel_pursuer_mps", "fuel_evader_mps"):
+            if k in d and d[k] is None:
+                d[k] = math.inf                          # JSON 的 null = 總 Δv 不設上限
+        if d.get("safe_sma_km") is not None:
+            d["safe_sma_km"] = tuple(float(x) for x in d["safe_sma_km"])
         return cls(**d)
 
     def with_(self, **kw) -> "Rules":
+        if kw.get("safe_sma_km") is not None:
+            kw["safe_sma_km"] = tuple(float(x) for x in kw["safe_sma_km"])
         return replace(self, **kw)
+
+    @property
+    def simultaneous(self) -> bool:
+        return self.turn_mode == "simultaneous"
 
 
 def _loguniform(rng, lo, hi):
