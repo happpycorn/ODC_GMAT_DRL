@@ -47,7 +47,7 @@
 |---|---|---|
 | 0–2 分 | 記錄 | 從 USB 複製狀態檔到 Mac；把公告的 ΔV_lim、R_cap、T_round、安全空域填進規則檔 `announced.json`（從 `final_official.json` 複製改數字） |
 | 2–3 分 | 主控 | 匯入初始狀態、確認數字（第四節步驟 1 的檢查） |
-| 3–7 分 | 主控 | 跑角色選擇器（3 分鐘內跑完）：**TODO（F4）** `uv run python tools/role_select.py initial.json --rules announced.json --workers 4 --budget-sec 150` |
+| 3–7 分 | 主控 | 跑角色選擇器（Corn 實測 90 s、Mac 約 100 s）：`uv run python tools/role_select.py initial.json --rules announced.json --workers 4 --budget-sec 150`（趕時間加 `--fast`，約 10 s） |
 | 7–9 分 | 全隊 | 看選擇器最後一行建議與兩個數字（我方當追方／躲方對最強對手的勝率）；另外看題目摘要裡的三個數 |
 | 9–10 分 | 主控 | 決定角色、告知工作人員 |
 
@@ -56,7 +56,10 @@
 - **逃方 a 離安全空域幾發**：0 表示一開始就在區間內（躲方可以自由閃）；越多發，躲方的推力方向越好猜（追方槓桿）。
 - **初始距離 / (ΔV_lim·T_round)**：小於 1 表示一回合就可能碰得到。
 
-（評測結論出來後補一張「哪種題目選哪個角色」的對照表——TODO（F4 評測，docs/EXPERIMENTS.md）。）
+**選角色原則（E28 評測，2026-11-01）**：預設選**躲方**。我們的躲方每回合算「追方怎麼推都碰不到」的推力，在 ΔV_lim 100–500、
+R_cap 1–20 km、T_round 600–3600 s 全範圍、安全空域偏移到 7 發都 240/240 撐完。只有兩種情況改選追方：
+1. 安全空域到不了（題目摘要的「中心偏移」遠超過 6 發，且選擇器我方躲方勝率不是 100%）；
+2. 選擇器顯示我方躲方對 capture_pursuer 勝率明顯低於 100%，或安全證書比例 < 90%。
 
 ---
 
@@ -122,7 +125,8 @@ uv run python tools/gmat_state_convert.py usb_state.json --out initial.json
 - 單回合攔截要在回合開始後很短時間內碰到（約 τ\* 內），否則躲方隨便閃就躲掉；抓不到的回合，把自己放到下一回合有利的位置。
 - 躲方最後 a 不在安全空域也是追方贏：把躲方逼到「閃避」和「推向安全空域」不能兼顧。
 
-（評測數字：TODO，見 `docs/EXPERIMENTS.md` 金／銅牌賽那幾節、`reports/final_*.md`。）
+（評測數字見 `docs/EXPERIMENTS.md` E27、E28：我方躲方對任何追方 0 被抓；我方追方對會算證書的躲方抓不到，對人類直覺閃法 44–57%、
+對不懂安全空域的躲方幾乎都贏。當追方時目標是逼對方在「閃避」與「推進安全空域」之間取捨。）
 
 ---
 

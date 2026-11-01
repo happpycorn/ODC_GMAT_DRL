@@ -532,3 +532,39 @@ Exploitability（我方勝率）：
 - **結論**：正式賽制下躲方結構性占優——同樣 ΔV_lim、每回合同時出手，躲方幾乎總找得到「追方怎麼推都碰不到」的推力，而且還能兼顧安全空域。
   追方的機會在：躲方不懂安全空域（sma_out）、躲方閃法可預測（啟發式 30%）、題目讓安全空域與閃避方向衝突。F3 追方與 F4 角色選擇器的評測接著做。
 - **產物**：`agents/final_common.py`、`agents/final_evader.py`、`tests/test_final_evader.py`、`tools/cert_check.py`、上列報表。
+
+## E28 F2 躲方、F3 追方、F4 角色選擇器：規則分布評測（2026-11-01）
+- **問題**：安全證書在什麼規則範圍下成立？追方什麼時候有機會？選角色該看哪些數字？
+- **設定**：`evaluate.py --rules final_ranges --scenario final`（每局抽 ΔV_lim 100–500 m/s、R_cap 1–20 km、T_round 600–3600 s，log-uniform，
+  雙方 ΔV_lim 相同；題目同 E27），追方 `capture_pursuer`／`lambert_pursuer` × 躲方 `safe_evader`／`dv_evader`／`heuristic_evader`，每組 120 局；
+  分桶用 `tools/final_breakdown.py`。另用 `tools/final_harsh_zone.py` 把安全空域偏移改成 4.5–5.5 與 5.5–7 發容量（初始都不在區間）各 40 局。
+- **結果**（`reports/f24_ranges.md`、`reports/f24_ranges_breakdown.md`；追方勝率）：
+
+| 追方 \ 躲方 | safe_evader | dv_evader | heuristic_evader |
+|---|---|---|---|
+| capture_pursuer | **0%** [0–3] | 98% | **44%** |
+| lambert_pursuer | 0% [0–3] | 100% | 30% |
+
+  - `safe_evader` 240/240 escape；**每個分桶都是 100%**（ΔV_lim、R_cap、T_round、τ\* = R_cap/ΔV_lim、初始距離/(ΔV_lim·T_round)、安全空域偏移）。
+    安全證書 1436/1440 回合成立（沒成立的 4 回合也沒被抓）；**證書成立的回合被捕獲 0 次**。最近距離中位數 194–278 km，每局約用 1.2 km/s。
+  - 壓力測試：安全空域偏移 4.5–5.5 發（`reports/f24_harsh_zone.md`）safe_evader 仍 40/40（capture_pursuer、lambert 都是）；偏移 5.5–7 發
+    （`reports/f24_zone_edge.md`，近端要 5–7 發容量）仍 40/40——實際一發的 Δa 隨 a 增大，產生器的線性估計與 0.9 保守係數都偏保守。
+    同樣的硬安全空域下，capture_pursuer 對 heuristic_evader 升到 57%（lambert 45%）：安全空域逼得越緊，人類式閃法越好猜。
+  - `capture_pursuer` 比 Lambert 強在會猜：對 heuristic 44% vs 30%（final_official 40% vs 28%、硬安全空域 57% vs 45%）。它的 hit_prob 對 safe_evader
+    平均 3.1%、實際 0%（模型裡的 F2 安全集合是 fast 版的近似，會高估），對 heuristic 4.6% vs 6%、對 dv_evader 17% vs 33%（低估）。
+  - 角色選擇器 demo（`tools/role_select.py`，final_official 一題、預設模式、4 worker、150 s 預算）：5 組各 40 局共 200 局，**牆鐘 90 s**
+    （Mac 估 ≈ 100 s，在 3 分鐘內）；建議「躲方」（我方追方 vs safe 0%、我方躲方 vs capture 100%），每回合證書 100%。`--fast` 同一題 40 局 6.4 s。
+- **決策時間**（f24 實測，Corn 12 worker 同時跑）：safe_evader 中位數 0.54 s、p99 1.28 s、最大 1.37 s；capture_pursuer 中位數 0.24 s、最大 0.68 s。
+  都遠低於每回合 30 s 的預算（Mac 單行程更快，見 E27 換算）。
+- **結論**：
+  1. **正式賽制下躲方結構性壓倒**：只要躲方每回合算安全證書（「追方怎麼推都碰不到」的推力）並把半長軸帶進安全空域，在我們測過的整個
+     規則範圍內追方都抓不到。安全空域偏移到 7 發容量也還夠。
+  2. **追方的機會只來自對手犯錯**：不算證書的直覺閃法（背向全推、法向、徑向、往安全空域推）被抓 30–57%；不懂安全空域的躲方被 sma_out。
+     抽到／選到追方時，用 capture_pursuer（會依安全空域猜躲方推力），目標是逼躲方在「閃避」和「推進安全空域」之間取捨。
+  3. **選角色**：預設選**躲方**。要改選追方只有兩種情況：(a) 安全空域根本到不了——`role_select.py` 題目摘要的「中心偏移」遠超過 6 發容量
+     （偏移 7 發還到得了，所以門檻要現場用選擇器實跑確認）；(b) 選擇器顯示我方躲方對 capture_pursuer 的勝率明顯低於 100%（證書比例 < 90%）。
+     其餘看 `role_select.py` 最後一行即可。
+  4. **剩下的風險不在策略**：官方狀態的精度與格式、epoch 對齊假設（提問 20）、撞地地球半徑（引擎 6378.137 vs GMAT 6378.1363）、
+     提交四捨五入到 0.01 m/s。最近距離常有上百 km，這些誤差（公尺級）不影響證書；但狀態抄錯單位或座標系會，F5 要把匯入防呆做好。
+- **產物**：`agents/final_{common,evader,pursuer}.py`、`tools/{role_select,final_breakdown,final_harsh_zone,cert_check}.py`、
+  `tests/test_{final_evader,final_pursuer,role_select,final_rules}.py`、上列報表。程式由 Codex（codex-cli 0.160）依規格撰寫，Claude 審查、驗證與評測。
