@@ -10,6 +10,8 @@
   時間緊：`advise state.json --prune`（★ 不變、推演表只做到能確定 ★ 為止）、再緊加 `--budget-sec 20`
   （超時就停，★ 只在做完的大腦裡選）；決策時間與建議見 docs/notes/copilot_eval.md
 
+金／銅牌賽（同時出手、6 回合）：`copilot.py final new|advise|announce|parse|manual|show ...`（見 final_copilot.py）。
+
 演練模式（不需要真比賽）：
   `copilot.py drill --role pursuer --opponent dv_evader --rules default`
   每回合印出建議並自動採用第一個大腦的建議，模擬整場；可 `--interactive` 手動選。
@@ -532,6 +534,11 @@ def _parse_specs(s):
 
 # ------------------------------------------------------------------ CLI
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv and argv[0] == "final":
+        # 金／銅牌賽（同時出手）流程在 final_copilot.py；舊指令照舊
+        import final_copilot
+        return final_copilot.main(argv[1:])
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
