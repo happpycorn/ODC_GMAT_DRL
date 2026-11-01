@@ -501,3 +501,34 @@ Exploitability（我方勝率）：
 - **2 發全攝動彩排**（`reports/e26_rehearsal_full_lazy_evader_2burn.md`；ranking_like_2burn、near_coplanar seed 0、ranking_full、我方躲者照 ★、對手 rollout 追者——E17 裡這組規則 rollout 追者抓 rollout 躲者 83%）：**撐到時限（勝）**，GMAT 真實最近 13.111 km、全程沒進捕獲球；匯入差最大 16.7 m；決策平均 21.4 s、最長 56.4 s（完整 advise、4 worker）。
 - **結論**：當天躲者照 ★ 就是 lazy_evader；標準指令用 `--prune`、`COPILOT_WORKERS=4`。追者的 ★ 排序在「全輸給某模型」時不可靠，人工看「贏 x/n」。
 - **產物**：`docs/notes/copilot_eval.md`、`reports/copilot_evader_vs_*.md`、`tests/test_copilot_agent.py`。
+
+## E27 金／銅牌賽正式賽制：F1 引擎煙霧、舊 agent 基準、F2 躲方初測（2026-11-01）
+- **問題**：2026/10/29 正式規則（同時出手、6 回合、總 Δv 無上限、純二體、安全空域終局）下，舊 agent 打成怎樣？F2 安全證書躲方（`safe_evader`）有沒有用？
+- **設定**：`configs/rulesets/final_official.json`（ΔV_lim 250、R_cap 5 km、T_round 1200 s 為佔位）＋ `--scenario final`
+  （`sample_final_scenario`：雙方 LEO 400–1500 km、初始距離 20–1000 km、安全空域約 20% 題目初始 a 已在區間、其餘偏 1–4 發容量）。
+  舊 agent 是為回合交替寫的，在同時出手局經 `game.core.round_view` 拿「回合交替、輪到自己」的副本決策。規則變體見
+  `configs/rulesets/final_{dv100,dv500,rcap1,rcap20,t600,t3600,corner_short,corner_long}.json`。
+- **F1 煙霧**（`reports/f1_smoke.md`）：lambert_pursuer 對 dv_evader 4 局全 capture；流程、報表、GMAT 二體重播（每回合差 < 0.1 m）都通。
+- **舊 agent 基準**（`reports/final_baseline.md`，每組 40 局）：
+
+| 追方 \ 躲方 | coast | random | dv_evader | lazy_evader | rollout_evader |
+|---|---|---|---|---|---|
+| lambert_pursuer | 100% | 95% | 100% | 100% | 100% |
+| rollout_pursuer | 72% | 90% | 75% | 75% | 75% |
+
+  舊躲方在交替副本裡以為追方這回合不動，幾乎不閃（dv_evader／lazy 平均只用 38 m/s），Lambert 第一回合就抓到；rollout 追方反而抓不到
+  （capture 1/40），它的勝利幾乎全是 **sma_out**（躲方沒把 a 推進安全空域，29/40）——撐完 6 回合的 escape 10–11/40 ≈ 初始 a 已在區間的比例。
+- **規則變體小批**（`reports/baseline_final_{dv100,t3600,corner_short,corner_long}.md`，lambert／rollout × coast／dv／lazy，每組 20 局）：
+  結論**不翻轉**——lambert 全部 100%，rollout 70–75%（同樣靠 sma_out）。只有 corner_short（ΔV_lim 100、R_cap 20、T_round 600）lambert 對 lazy 的
+  capture 降到 11/20（其餘 sma_out）。
+- **F2 初測**（`reports/f2_preview.md`，每組 40 局）：`safe_evader` 對 lambert_pursuer、rollout_pursuer **40/40 escape**（追方勝率 0% [0–9]），
+  最近距離中位數 274／444 km；`heuristic_evader`（人類直覺閃法）存活 70%／68%。躲方每局約用 1.1–1.2 km/s。
+- **證書獨立檢查**（`tools/cert_check.py`）：隨機規則（ΔV_lim 100–500、R_cap 1–20、T_round 600–3600）＋隨機推進 0–3 回合的 38 個局面，
+  證書 38/38 成立；對躲方選定軌跡每秒用 Lambert 求「追方剛好命中」的 Δv，**沒有一個 ≤ ΔV_lim**（最小 1.07 倍、中位數 3.3 倍）。
+  F2 規格測試的線性化誤差（20 題 × 5 推力，對非線性最佳回應）：中位數 0.95 km／0.27%、最大 2.5 km／27%——所以選定候選一律再做非線性驗證。
+- **Mac 換算**（`reports/corn_advise_20261101/`，同一批 `copilot.py advise --prune`、暖機中位數，對照 `docs/notes/mac_advise_timing_20261101.md`）：
+  單行程 Mac M4 ≈ **0.65–0.71 × Corn**（Ryzen 7 5800X）；4 worker 時 Mac ≈ 0.77–1.1 × Corn。Corn 的單次決策秒數當 Mac 的保守上限、
+  4 worker 牆鐘乘 1.1。safe_evader 單次決策 Corn 0.3–0.7 s（T_round 3600 s 時 0.67 s）、fast 0.06 s。
+- **結論**：正式賽制下躲方結構性占優——同樣 ΔV_lim、每回合同時出手，躲方幾乎總找得到「追方怎麼推都碰不到」的推力，而且還能兼顧安全空域。
+  追方的機會在：躲方不懂安全空域（sma_out）、躲方閃法可預測（啟發式 30%）、題目讓安全空域與閃避方向衝突。F3 追方與 F4 角色選擇器的評測接著做。
+- **產物**：`agents/final_common.py`、`agents/final_evader.py`、`tests/test_final_evader.py`、`tools/cert_check.py`、上列報表。
