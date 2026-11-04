@@ -15,4 +15,4 @@ wheels/
 runs/
 reports/*.jsonl
 reports/*.log
-reports/smoke*
+reports/smoke*.DS_Store

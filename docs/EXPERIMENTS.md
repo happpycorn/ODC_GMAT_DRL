@@ -564,7 +564,7 @@ Exploitability（我方勝率）：
   3. **選角色**：預設選**躲方**。要改選追方只有兩種情況：(a) 安全空域根本到不了——`role_select.py` 題目摘要的「中心偏移」遠超過 6 發容量
      （偏移 7 發還到得了，所以門檻要現場用選擇器實跑確認）；(b) 選擇器顯示我方躲方對 capture_pursuer 的勝率明顯低於 100%（證書比例 < 90%）。
      其餘看 `role_select.py` 最後一行即可。
-  4. **剩下的風險不在策略**：官方狀態的精度與格式、epoch 對齊假設（提問 20）、撞地地球半徑（引擎 6378.137 vs GMAT 6378.1363）、
+  4. **剩下的風險不在策略**：官方狀態的精度與格式、epoch 對齊假設（開賽時問工作人員）、撞地地球半徑（引擎 6378.137 vs GMAT 6378.1363）、
      提交四捨五入到 0.01 m/s。最近距離常有上百 km，這些誤差（公尺級）不影響證書；但狀態抄錯單位或座標系會，F5 要把匯入防呆做好。
 - **產物**：`agents/final_{common,evader,pursuer}.py`、`tools/{role_select,final_breakdown,final_harsh_zone,cert_check}.py`、
   `tests/test_{final_evader,final_pursuer,role_select,final_rules}.py`、上列報表。程式由 Codex（codex-cli 0.160）依規格撰寫，Claude 審查、驗證與評測。
@@ -580,7 +580,7 @@ Exploitability（我方勝率）：
     經 GmatConsole（EarthFixed／SphericalAZFPA）轉狀態、`align_initial_states` 對齊（`configs/scenarios/taiwan_launch_bank.json`，120 對，
     初始距離 120–13,700 km、中位數 8,700 km），安全空域照 cover／narrow／cross／far 隨機放。
   每類 capture_pursuer／lambert_pursuer × safe_evader／heuristic_evader 各 40 局；分桶用 `tools/final_breakdown.py`（會列出 safe_evader 輸的每一局）。
-- **第一輪找到兩個弱點**（`reports/f29_adv_*.md`、`reports/f29v2_adv_*.md`）：證書比例每類都 ≥ 98.6%、證書成立的回合 0 被抓，
+- **第一輪找到兩個弱點**（`reports/f29_adv_*`、`reports/f29v2_adv_*`，已被 f29v3 取代並於 11-04 刪除，見 git 歷史）：證書比例每類都 ≥ 98.6%、證書成立的回合 0 被抓，
   但 safe_evader 輸了 2 局，**都是 sma_out，不是被抓**：
   1. `narrow` 寬 0.02 Δa（14 km）：候選大小只有 {0, 0.5, 1}×ΔV_lim，最後一回合落不進去 → 加「推完 a 剛好在區間中心」的候選
      （每回合 60 個方向，二分求大小；`SafeEvader(zone_dirs=60)`，fast 版 30）。

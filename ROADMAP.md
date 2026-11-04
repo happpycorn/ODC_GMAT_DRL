@@ -1,5 +1,7 @@
 # ROADMAP —— 到 2026-11-09 決賽
 
+> **2026-11-04 註**：11-01 正式規則公布後，主線改成 [FINAL_RULES_PLAN](docs/FINAL_RULES_PLAN_20261101.md) 的 F1–F6；下面的「策略主軸」與階段 0–4 是舊賽制的紀錄。11-04 起軟凍結，只換參數、修彩排 bug、改手冊。
+
 進度同步在 Linear 專案 `ODC_GMAT_DRL`（team Happpycorn）。實驗數字見 [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)。
 
 ## 策略主軸
