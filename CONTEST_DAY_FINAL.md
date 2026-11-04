@@ -8,7 +8,7 @@
 
 ---
 
-> **Mac 上一律用 `.venv/bin/python`，不要用 `uv run`。** repo 的 `.python-version` 是 3.10，`uv run` 會把 Mac 的 3.12 venv 刪掉重建，3.10 的 scipy 在這台 Mac 載入失敗，現場沒網路救不回來。賽前若 venv 壞了：有網路時跑 `uv sync --python 3.12`。
+> **指令一律用 `.venv/bin/python`。** 11-04 前 `.python-version` 是 3.10，`uv run` 會把 Mac 的 3.12 venv 重建成 3.10、scipy 載入失敗；已改成 3.12 並離線驗證 `uv run` 不會動 venv，但手冊仍直接呼叫 venv，最保險。venv 壞了：有網路時跑 `uv sync --python 3.12`。
 
 ## 一、規則重點（只記會影響操作的）
 
