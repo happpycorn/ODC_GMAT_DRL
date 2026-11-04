@@ -71,7 +71,7 @@ F4 讓選角色這一步有依據。
 | F3 追方 `capture_pursuer`（加權躲方模型、Lambert／最佳回應、對手偏好） | 完成 | `agents/final_pursuer.py` |
 | F4 角色選擇器（自我對打、證書比例、安全空域對抗特徵、到不了就選追方） | 完成 | `tools/role_select.py` |
 | F5 copilot（`copilot.py final`：讀任意格式官方狀態、建議、提交行四捨五入重驗、一致性檢查、對手偏好） | 完成 | `final_copilot.py`、`game/official_io.py`、`configs/final_format.json` |
-| F6 彩排工具（GMAT 二體當真實世界、我方走完整 CLI） | Corn 完成；Mac 拔網路彩排待做 | `tools/final_rehearsal.py`、`CONTEST_DAY_FINAL.md` 第九節 |
+| F6 彩排工具（GMAT 二體當真實世界、我方走完整 CLI） | Corn 完成；Mac 拔網路彩排待做 | `tools/final_rehearsal.py`、`PRE_CONTEST_FINAL.md` |
 
 **結論（docs/EXPERIMENTS.md E27–E29）**：正式賽制下躲方結構性壓倒。安全證書躲方在 ΔV_lim 100–500 m/s、R_cap 1–20 km、
 T_round 600–3600 s 全範圍，以及安全空域對抗題（蓋住追方 a、0.02 發寬、要穿過追方軌道、5 發遠、初始很近、台灣入軌 epoch 差 0–24 h）

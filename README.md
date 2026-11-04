@@ -5,7 +5,7 @@
 - **怎麼用** → 這份
 - **問題本質、理論、為什麼這樣做、實測教訓** → [METHODOLOGY.md](METHODOLOGY.md)
 - **每個實驗量到什麼（E1–E12）** → [docs/EXPERIMENTS.md](docs/EXPERIMENTS.md)
-- **當天流程** → [CONTEST_DAY_FINAL.md](CONTEST_DAY_FINAL.md)
+- **當天流程** → [CONTEST_DAY_FINAL.md](CONTEST_DAY_FINAL.md)；賽前檢查 → [PRE_CONTEST_FINAL.md](PRE_CONTEST_FINAL.md)
 - **做到哪、接下來做什麼** → [ROADMAP.md](ROADMAP.md)（進度同步在 Linear 專案 `ODC_GMAT_DRL`）
 
 ---
