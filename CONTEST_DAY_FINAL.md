@@ -8,6 +8,8 @@
 
 ---
 
+> **Mac 上一律用 `.venv/bin/python`，不要用 `uv run`。** repo 的 `.python-version` 是 3.10，`uv run` 會把 Mac 的 3.12 venv 刪掉重建，3.10 的 scipy 在這台 Mac 載入失敗，現場沒網路救不回來。賽前若 venv 壞了：有網路時跑 `uv sync --python 3.12`。
+
 ## 一、規則重點（只記會影響操作的）
 
 | 項目 | 規則 | 我們的對應 |
@@ -63,22 +65,22 @@ open -e day/announced.json
 
 **2. 初始狀態**
 ```bash
-uv run python copilot.py final parse day/<USB檔>
+.venv/bin/python copilot.py final parse day/<USB檔>
 ```
 看印出來的 |r|（要像 6700–8000 km）、|v|（要像 7–8 km/s）、高度、格式判斷。檔案裡的船名認不出來時加
 `--names pursuer=<追方船名>,evader=<逃方船名>` 或 `--order pursuer,evader`。
 - 狀態是**經緯高**（EarthFixed／SphericalAZFPA 等 GMAT 欄位）：先轉成 EarthMJ2000Eq，再 parse 轉出來的檔
   ```bash
-  uv run python tools/gmat_state_convert.py day/<經緯高.json> --out day/initial.json
+  .venv/bin/python tools/gmat_state_convert.py day/<經緯高.json> --out day/initial.json
   ```
   輸入 JSON 每艘寫 GMAT 欄位：`{"pursuer": {"DateFormat": "UTCGregorian", "Epoch": "09 Nov 2026 00:00:00.000",
   "CoordinateSystem": "EarthFixed", "DisplayStateType": "SphericalAZFPA", "RMAG": ..., "RA": 經度, "DEC": 緯度,
   "VMAG": ..., "AZI": ..., "FPA": ...}, "evader": {...}}`（FPA 水平 = 90°）。
-- 什麼格式都讀不了：`uv run python copilot.py final manual --out day/initial.json`，照提示逐項輸入 12 個數字。
+- 什麼格式都讀不了：`.venv/bin/python copilot.py final manual --out day/initial.json`，照提示逐項輸入 12 個數字。
 
 **3. 角色選擇器**
 ```bash
-uv run python tools/role_select.py day/<初始狀態檔> --rules day/announced.json --workers 4 --budget-sec 150
+.venv/bin/python tools/role_select.py day/<初始狀態檔> --rules day/announced.json --workers 4 --budget-sec 150
 ```
 （`<初始狀態檔>` 要是 JSON：`day/initial.json`，或 parse 確認過的 JSON 檔。）
 看三樣：
@@ -95,7 +97,7 @@ R_cap 1–20 km、T_round 600–3600 s 全範圍，加上安全空域蓋住追�
 
 **4. 建 session**（角色定了才做；之後每回合都用這個檔）
 ```bash
-uv run python copilot.py final new --rules day/announced.json --initial day/<初始狀態檔> --role evader --out day/session.json
+.venv/bin/python copilot.py final new --rules day/announced.json --initial day/<初始狀態檔> --role evader --out day/session.json
 ```
 （我方是追方就 `--role pursuer`。兩艘 epoch 不同時會印「傳播了幾秒」，要跟公告對得上。）
 
@@ -116,7 +118,7 @@ uv run python copilot.py final new --rules day/announced.json --initial day/<初
 
 **advise**
 ```bash
-uv run python copilot.py final advise day/session.json --state day/<本回合起點狀態檔>
+.venv/bin/python copilot.py final advise day/session.json --state day/<本回合起點狀態檔>
 ```
 - 第 1 回合不加 `--state`（用建 session 時的初始狀態）。
 - 狀態檔讀不了：改 `--manual`（逐項輸入）。
@@ -134,13 +136,13 @@ uv run python copilot.py final advise day/session.json --state day/<本回合起
 
 **announce**（主辦公告這回合雙方實際 Δv 後）
 ```bash
-uv run python copilot.py final announce day/session.json --opponent-dv <X> <Y> <Z> --our-dv <X> <Y> <Z> --state day/<下一回合起點狀態檔>
+.venv/bin/python copilot.py final announce day/session.json --opponent-dv <X> <Y> <Z> --our-dv <X> <Y> <Z> --state day/<下一回合起點狀態檔>
 ```
 - `--our-dv` 是主辦公告的「我方實際 Δv」：跟我們提交的不同會警告（抄錯或被縮放）。
 - `--state` 有就加（立刻做一致性檢查）；沒有也可以，下回合 advise 時再核對。
 - 對手的推法會被分類（不推／背向／法向／徑向／往安全空域推／其他）並累積；我方是追方時下回合會照這個調猜法。
 
-**整場摘要**：`uv run python copilot.py final show day/session.json`
+**整場摘要**：`.venv/bin/python copilot.py final show day/session.json`
 
 ---
 
@@ -199,11 +201,11 @@ uv run python copilot.py final announce day/session.json --opponent-dv <X> <Y> <
 
 ## 九、賽前 Mac 檢查（只能在 Mac 上做；Corn 已驗過的不用重做）
 
-- [ ] `git pull && uv sync && uv run pytest`（全綠，含 GMAT 測試；GmatConsole 路徑 `/Users/corn/Documents/GMAT R2026a/bin/GmatConsole`）
+- [ ] `git pull && uv sync --python 3.12 && .venv/bin/python -m pytest`（全綠，含 GMAT 測試；GmatConsole 路徑 `/Users/corn/Documents/GMAT R2026a/bin/GmatConsole`）
 - [ ] **拔網路**，照本手冊用彩排工具各跑一場（追方、躲方），每回合計時 10 分鐘：
   ```bash
-  uv run python tools/final_rehearsal.py --role evader --opponent capture_pursuer --workdir day_rehearsal_e
-  uv run python tools/final_rehearsal.py --role pursuer --opponent heuristic_evader --workdir day_rehearsal_p
+  .venv/bin/python tools/final_rehearsal.py --role evader --opponent capture_pursuer --workdir day_rehearsal_e
+  .venv/bin/python tools/final_rehearsal.py --role pursuer --opponent heuristic_evader --workdir day_rehearsal_p
   ```
   它用 GMAT 二體當真實世界、每回合寫一個官方格式的狀態檔，我方完整走 `copilot.py final`；`day_rehearsal_*/` 裡的檔案可以
   拿來手動再走一次 advise／announce 練手寫。
