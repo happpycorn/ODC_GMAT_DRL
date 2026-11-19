@@ -1,5 +1,7 @@
 # ODC_GMAT_DRL —— 軌道設計競賽「決賽」追逃戰
 
+> **已封存（2026-11-19）**：這個 repo 在 2026-11-06 已整個併入 [happpycorn/ODC_GMAT_Planner](https://github.com/happpycorn/ODC_GMAT_Planner) 的 `medal/`（保留完整歷史），這裡不再更新。比賽結果與教訓看該 repo 的 `docs/final/POSTMORTEM_20261109.md`、`docs/LESSONS.md`；最終版本是該 repo 的 tag `final-20261109`。
+
 第一屆軌道設計競賽（TASA / 淡江）**決賽（四強賽）** 的物理、解析/推演策略、DRL 訓練與當天作戰工具。初賽 9/5 已晉級（57 隊取前 8）；決賽 **2026-11-09 @ 大臺南會展中心**。
 
 - **怎麼用** → 這份
